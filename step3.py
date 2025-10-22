@@ -1,93 +1,152 @@
 import streamlit as st
 from pathlib import Path
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
+from PIL import Image
 import pysrt
 import os
 
+# ===================== 工具函数 =====================
+def srt_time_to_seconds(t):
+    """将 pysrt.SubRipTime 转为秒(float)."""
+    return t.hours * 3600 + t.minutes * 60 + t.seconds + t.milliseconds / 1000
+
+def generate_subtitle_clips(subs, h, style):
+    """根据 SRT 生成字幕 TextClip 列表."""
+    clips = []
+    for sub in subs:
+        txt_clip = TextClip(
+            sub.text,
+            fontsize=style["font_size"],
+            color=style["font_color"],
+            stroke_color=style["stroke_color"],
+            stroke_width=style["stroke_width"],
+            method="caption",
+            size=(style["max_text_width"], None),
+            align="center",
+        )
+        txt_clip = txt_clip.set_position(("center", h - style["bottom_offset"]))
+        start = srt_time_to_seconds(sub.start)
+        end = srt_time_to_seconds(sub.end)
+        txt_clip = txt_clip.set_start(start).set_end(end)
+        clips.append(txt_clip)
+    return clips
+
+
+# ===================== 主程序 =====================
 def run():
-    st.header("Step 3: 视频添加字幕 & 字幕位置可视化调整")
+    st.header("🎬 Step 3: 字幕样式调整 + 批量视频加字幕")
 
-    # ---------- 选择预览视频 ----------
-    st.subheader("字幕位置预览")
-    video_file = st.file_uploader("选择视频文件用于预览", type=["mp4", "mov", "mkv"])
-    srt_file = st.file_uploader("选择对应的 SRT 文件", type=["srt"])
-    subtitle_bottom = st.slider("字幕底部距离视频底边 (像素)", 10, 200, 50)
+    # ---------- Step 1: 样式预览 ----------
+    st.subheader("🎨 Step 1: 字幕样式可视化调整")
+    preview_video = st.file_uploader("选择一个视频用于字幕样式预览", type=["mp4", "mov", "mkv"])
 
-    if video_file and srt_file:
-        # 临时保存上传文件
+    if preview_video:
         temp_video_path = Path("temp_preview_video.mp4")
-        temp_srt_path = Path("temp_preview.srt")
         with open(temp_video_path, "wb") as f:
-            f.write(video_file.read())
-        with open(temp_srt_path, "wb") as f:
-            f.write(srt_file.read())
+            f.write(preview_video.read())
 
         clip = VideoFileClip(str(temp_video_path))
         w, h = clip.size
-        subs = pysrt.open(str(temp_srt_path))
 
-        # 生成第一帧带字幕预览
-        first_sub = subs[0] if subs else None
-        if first_sub:
-            txt_clip = TextClip(first_sub.text, fontsize=24, color='white', stroke_color='black', stroke_width=1)
-            txt_clip = txt_clip.set_position(("center", h - subtitle_bottom))
-            txt_clip = txt_clip.set_start(first_sub.start.seconds)
-            txt_clip = txt_clip.set_end(first_sub.end.seconds)
-            preview_clip = CompositeVideoClip([clip.subclip(0, first_sub.end.seconds), txt_clip])
-        else:
-            preview_clip = clip.subclip(0, 5)  # 如果没有字幕，截取前5秒
+        st.sidebar.header("🎨 字幕样式设置")
+        subtitle_text = "I am subtitle"
+        font_size = st.sidebar.slider("字体大小", 12, 80, 36)
+        font_color = st.sidebar.color_picker("字体颜色", "#FFFFFF")
+        stroke_color = st.sidebar.color_picker("描边颜色", "#000000")
+        stroke_width = st.sidebar.slider("描边宽度", 0, 5, 2)
+        bottom_offset = st.sidebar.slider("字幕距离视频底部 (像素)", 0, 300, 100)
+        width_ratio = st.sidebar.slider("字幕最大宽度占视频比例", 0.2, 1.0, 0.6, step=0.05)
 
-        preview_frame = preview_clip.get_frame(0.5)  # 获取0.5秒帧
-        from PIL import Image
-        st.image(Image.fromarray(preview_frame))
+        max_text_width = int(w * width_ratio)
 
-    # ---------- 批量处理视频 ----------
-    st.subheader("批量添加字幕到视频")
+        txt_clip = TextClip(
+            subtitle_text,
+            fontsize=font_size,
+            color=font_color,
+            stroke_color=stroke_color,
+            stroke_width=stroke_width,
+            method="caption",
+            size=(max_text_width, None),
+            align="center",
+        )
+        txt_clip = txt_clip.set_position(("center", h - bottom_offset))
+        txt_clip = txt_clip.set_duration(5)
+
+        preview_clip = CompositeVideoClip([clip.subclip(0, 5), txt_clip])
+        frame = preview_clip.get_frame(1.0)
+        st.image(Image.fromarray(frame), caption="字幕样式预览", use_column_width=True)
+
+        # 保存样式配置
+        style = {
+            "font_size": font_size,
+            "font_color": font_color,
+            "stroke_color": stroke_color,
+            "stroke_width": stroke_width,
+            "bottom_offset": bottom_offset,
+            "max_text_width": max_text_width,
+        }
+        st.session_state["subtitle_style"] = style
+        st.success("✅ 样式设置已保存，可用于批量字幕添加。")
+
+    # ---------- Step 2: 批量加字幕 ----------
+    st.subheader("📦 Step 2: 批量为视频添加字幕")
+
     video_dir = st.text_input("视频文件夹路径")
     srt_dir = st.text_input("SRT 文件夹路径")
     output_dir = st.text_input("输出视频文件夹路径")
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    batch_bottom = st.slider("字幕底部距离视频底边 (像素) - 批量", 10, 200, 50)
+    if st.button("🚀 开始批量添加字幕"):
+        if "subtitle_style" not in st.session_state:
+            st.warning("请先在上方调整并保存字幕样式！")
+            return
 
-    if st.button("开始批量添加字幕"):
-        if not video_dir or not os.path.exists(video_dir):
-            st.warning("请提供有效的视频文件夹路径")
-        elif not srt_dir or not os.path.exists(srt_dir):
-            st.warning("请提供有效的 SRT 文件夹路径")
-        else:
-            video_files = sorted([f for f in os.listdir(video_dir) if f.lower().endswith((".mp4", ".mov", ".mkv"))])
-            srt_files = sorted([f for f in os.listdir(srt_dir) if f.lower().endswith(".srt")])
+        style = st.session_state["subtitle_style"]
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-            if not video_files or not srt_files:
-                st.warning("视频或字幕文件夹为空")
-            else:
-                for video_file in video_files:
-                    video_path = os.path.join(video_dir, video_file)
-                    srt_file = next((f for f in srt_files if Path(f).stem == Path(video_file).stem), None)
-                    if not srt_file:
-                        st.warning(f"{video_file} 没有找到对应的 SRT，跳过")
-                        continue
+        if not os.path.exists(video_dir) or not os.path.exists(srt_dir):
+            st.warning("请提供有效的视频和 SRT 文件夹路径。")
+            return
 
-                    srt_path = os.path.join(srt_dir, srt_file)
-                    output_path = os.path.join(output_dir, video_file)
-                    if os.path.exists(output_path):
-                        st.info(f"{video_file} 已处理，跳过")
-                        continue
+        video_files = sorted([f for f in os.listdir(video_dir) if f.lower().endswith((".mp4", ".mov", ".mkv"))])
+        srt_files = sorted([f for f in os.listdir(srt_dir) if f.lower().endswith(".srt")])
 
-                    clip = VideoFileClip(video_path)
-                    w, h = clip.size
-                    subs = pysrt.open(srt_path)
-                    subtitle_clips = []
+        if not video_files or not srt_files:
+            st.warning("视频或字幕文件夹为空。")
+            return
 
-                    for sub in subs:
-                        txt_clip = TextClip(sub.text, fontsize=24, color='white', stroke_color='black', stroke_width=1)
-                        txt_clip = txt_clip.set_position(("center", h - batch_bottom))
-                        txt_clip = txt_clip.set_start(sub.start.seconds + sub.start.microseconds/1e6)
-                        txt_clip = txt_clip.set_end(sub.end.seconds + sub.end.microseconds/1e6)
-                        subtitle_clips.append(txt_clip)
+        progress = st.progress(0)
+        total = len(video_files)
 
-                    video = CompositeVideoClip([clip, *subtitle_clips])
-                    video.write_videofile(output_path, codec="libx264", audio_codec="aac")
+        for i, video_name in enumerate(video_files):
+            video_path = os.path.join(video_dir, video_name)
+            srt_name = Path(video_name).stem + ".srt"
+            srt_path = os.path.join(srt_dir, srt_name)
+            output_path = os.path.join(output_dir, video_name)
 
-                    st.success(f"{video_file} 已处理完成")
+            if not os.path.exists(srt_path):
+                st.warning(f"⚠️ {video_name} 没有找到对应的 SRT，跳过")
+                continue
+
+            if os.path.exists(output_path):
+                st.info(f"✅ {video_name} 已存在，跳过")
+                continue
+
+            clip = VideoFileClip(video_path)
+            w, h = clip.size
+            style["max_text_width"] = int(w * (style["max_text_width"] / w))  # 保持比例
+
+            subs = pysrt.open(srt_path)
+            subtitle_clips = generate_subtitle_clips(subs, h, style)
+
+            video = CompositeVideoClip([clip, *subtitle_clips])
+            st.write(f"🎞️ 正在处理: {video_name}")
+            video.write_videofile(output_path, codec="libx264", audio_codec="aac", threads=4, logger=None)
+
+            progress.progress((i + 1) / total)
+            st.success(f"✅ {video_name} 已处理完成")
+
+        st.success("🎉 所有视频已处理完成！")
+
+
+if __name__ == "__main__":
+    run()
