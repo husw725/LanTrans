@@ -40,7 +40,7 @@ def run():
     # 输入输出目录
     input_dir = st.text_input("输入 SRT 文件夹路径：")
     output_dir = st.text_input("输出翻译结果文件夹路径：")
-    target_lang = st.selectbox("目标语言", ["English","Japanese","Korean","Spanish","French","German","Thai","Vietnamese"])
+    target_lang = st.selectbox("目标语言", ["English","Japanese","Korean","Spanish","French","German","Thai","Vietnamese","Chinese"])
 
     if st.button("开始批量翻译"):
         if not input_dir or not os.path.exists(input_dir):
