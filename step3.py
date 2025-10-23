@@ -68,6 +68,7 @@ def run():
             method="caption",
             size=(max_text_width, None),
             align="center",
+            font="Arial",
         )
         txt_clip = txt_clip.set_position(("center", h - bottom_offset))
         txt_clip = txt_clip.set_duration(5)
