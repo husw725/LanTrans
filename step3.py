@@ -1,6 +1,6 @@
 import streamlit as st
 from pathlib import Path
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip
 from PIL import Image
 import pysrt
 import os
