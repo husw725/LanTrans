@@ -10,7 +10,7 @@ is_windows = os.name == "nt"
 if is_windows:
     import moviepy.config as mpy_config
     mpy_config.change_settings({
-        "IMAGEMAGICK_BINARY": r"C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
+        "IMAGEMAGICK_BINARY": r"C:\\Program Files\ImageMagick-7.1.2-Q16-HDRI\\magick.exe"
     })
 
 # ===================== 工具函数 =====================
@@ -86,7 +86,7 @@ def run():
 
         preview_clip = CompositeVideoClip([clip.subclip(0, 5), txt_clip])
         frame = preview_clip.get_frame(1.0)
-        st.image(Image.fromarray(frame), caption="字幕样式预览", use_column_width=True)
+        st.image(Image.fromarray(frame), caption="字幕样式预览", use_container_width=True)
 
         # 保存样式配置
         style = {
