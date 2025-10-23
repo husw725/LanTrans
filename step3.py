@@ -4,6 +4,7 @@ from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from PIL import Image
 import pysrt
 import os
+import platform
 
 # ===================== 工具函数 =====================
 def srt_time_to_seconds(t):
@@ -20,9 +21,10 @@ def generate_subtitle_clips(subs, h, style):
             color=style["font_color"],
             stroke_color=style["stroke_color"],
             stroke_width=style["stroke_width"],
-            method="caption",
+            method="caption",  # ✅ 强制使用 PIL
             size=(style["max_text_width"], None),
             align="center",
+            font=style.get("font", "Arial"),  # ✅ 默认字体
         )
         txt_clip = txt_clip.set_position(("center", h - style["bottom_offset"]))
         start = srt_time_to_seconds(sub.start)
@@ -56,6 +58,7 @@ def run():
         stroke_width = st.sidebar.slider("描边宽度", 0, 5, 2)
         bottom_offset = st.sidebar.slider("字幕距离视频底部 (像素)", 0, 300, 100)
         width_ratio = st.sidebar.slider("字幕最大宽度占视频比例", 0.2, 1.0, 0.6, step=0.05)
+        font_name = st.sidebar.text_input("字体名（如 Arial 或 微软雅黑）", "Arial")
 
         max_text_width = int(w * width_ratio)
 
@@ -65,10 +68,10 @@ def run():
             color=font_color,
             stroke_color=stroke_color,
             stroke_width=stroke_width,
-            method="caption",
+            method="caption",  # ✅ 必须指定，否则 Windows 调 ImageMagick
             size=(max_text_width, None),
             align="center",
-            font="Arial",
+            font=font_name,
         )
         txt_clip = txt_clip.set_position(("center", h - bottom_offset))
         txt_clip = txt_clip.set_duration(5)
@@ -85,6 +88,7 @@ def run():
             "stroke_width": stroke_width,
             "bottom_offset": bottom_offset,
             "max_text_width": max_text_width,
+            "font": font_name,
         }
         st.session_state["subtitle_style"] = style
         st.success("✅ 样式设置已保存，可用于批量字幕添加。")
@@ -141,7 +145,14 @@ def run():
 
             video = CompositeVideoClip([clip, *subtitle_clips])
             st.write(f"🎞️ 正在处理: {video_name}")
-            video.write_videofile(output_path, codec="libx264", audio_codec="aac", threads=4, logger=None)
+            video.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac",
+                threads=4,
+                logger=None,
+                preset="ultrafast"  # ✅ 提升处理速度
+            )
 
             progress.progress((i + 1) / total)
             st.success(f"✅ {video_name} 已处理完成")
