@@ -5,6 +5,14 @@ from PIL import Image
 import pysrt
 import os
 
+#check if running on windows
+is_windows = os.name == "nt"
+if is_windows:
+    import moviepy.config as mpy_config
+    mpy_config.change_settings({
+        "IMAGEMAGICK_BINARY": r"C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
+    })
+
 # ===================== 工具函数 =====================
 def srt_time_to_seconds(t):
     """将 pysrt.SubRipTime 转为秒(float)."""
