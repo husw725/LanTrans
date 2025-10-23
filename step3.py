@@ -10,8 +10,11 @@ is_windows = os.name == "nt"
 if is_windows:
     import moviepy.config as mpy_config
     mpy_config.change_settings({
-        "IMAGEMAGICK_BINARY": r"C:\\Program Files\ImageMagick-7.1.2-Q16-HDRI\\magick.exe"
+        "IMAGEMAGICK_BINARY": r"C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick.exe"
     })
+    font_path = r"C:\Windows\Fonts\arial.ttf"
+else:
+    font_path = "Arial"
 
 # ===================== 工具函数 =====================
 def srt_time_to_seconds(t):
@@ -30,10 +33,8 @@ def generate_subtitle_clips(subs, h, style):
             "method": "caption",
             "size": (style["max_text_width"], None),
             "align": "center",
+            "font": font_path,
         }
-        if is_windows:
-            txt_kwargs["font"] = font_path
-
         txt_clip = TextClip(sub.text, **txt_kwargs)
         txt_clip = txt_clip.set_position(("center", h - style["bottom_offset"]))
         start = srt_time_to_seconds(sub.start)
@@ -41,7 +42,6 @@ def generate_subtitle_clips(subs, h, style):
         txt_clip = txt_clip.set_start(start).set_end(end)
         clips.append(txt_clip)
     return clips
-
 
 # ===================== 主程序 =====================
 def run():
@@ -79,14 +79,14 @@ def run():
             method="caption",
             size=(max_text_width, None),
             align="center",
-            font="Arial",
+            font=font_path,
         )
         txt_clip = txt_clip.set_position(("center", h - bottom_offset))
         txt_clip = txt_clip.set_duration(5)
 
         preview_clip = CompositeVideoClip([clip.subclip(0, 5), txt_clip])
         frame = preview_clip.get_frame(1.0)
-        st.image(Image.fromarray(frame), caption="字幕样式预览", width="stretch")
+        st.image(Image.fromarray(frame), caption="字幕样式预览", use_column_width=True)
 
         # 保存样式配置
         style = {
@@ -107,6 +107,11 @@ def run():
     srt_dir = st.text_input("SRT 文件夹路径")
     output_dir = st.text_input("输出视频文件夹路径")
 
+    match_mode = st.radio(
+        "选择 SRT 匹配方式",
+        ("按文件名匹配同名 SRT", "按排序顺序对应")
+    )
+
     if st.button("🚀 开始批量添加字幕"):
         if "subtitle_style" not in st.session_state:
             st.warning("请先在上方调整并保存字幕样式！")
@@ -126,17 +131,27 @@ def run():
             st.warning("视频或字幕文件夹为空。")
             return
 
+        if match_mode == "按排序顺序对应" and len(video_files) != len(srt_files):
+            st.warning("⚠️ 视频文件数量与 SRT 文件数量不一致！")
+            return
+
         progress = st.progress(0)
         total = len(video_files)
 
         for i, video_name in enumerate(video_files):
             video_path = os.path.join(video_dir, video_name)
-            srt_name = Path(video_name).stem + ".srt"
+
+            # 根据匹配模式选择 SRT
+            if match_mode == "按文件名匹配同名 SRT":
+                srt_name = Path(video_name).stem + ".srt"
+            else:  # 按排序对应
+                srt_name = srt_files[i]
+
             srt_path = os.path.join(srt_dir, srt_name)
             output_path = os.path.join(output_dir, video_name)
 
             if not os.path.exists(srt_path):
-                st.warning(f"⚠️ {video_name} 没有找到对应的 SRT，跳过")
+                st.warning(f"⚠️ {video_name} 没有找到对应的 SRT ({srt_name})，跳过")
                 continue
 
             if os.path.exists(output_path):
