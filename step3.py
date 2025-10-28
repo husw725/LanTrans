@@ -86,7 +86,7 @@ def run():
 
         preview_clip = CompositeVideoClip([clip.subclip(0, 5), txt_clip])
         frame = preview_clip.get_frame(1.0)
-        st.image(Image.fromarray(frame), caption="字幕样式预览", use_column_width=True)
+        st.image(Image.fromarray(frame), caption="字幕样式预览", width="stretch")
 
         # 保存样式配置
         style = {

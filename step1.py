@@ -40,7 +40,25 @@ def run():
     # 输入输出目录
     input_dir = st.text_input("输入 SRT 文件夹路径：")
     output_dir = st.text_input("输出翻译结果文件夹路径：")
-    target_lang = st.selectbox("目标语言", ["English","Japanese","Korean","Spanish","French","German","Thai","Vietnamese","Chinese"])
+    # 支持的语言列表（显示中英对照，但内部使用英文名作为模型指令）
+    LANG_OPTIONS = {
+        "阿拉伯语 (Arabic)": "Arabic",
+        "英语 (English)": "English",
+        "西班牙语 (Spanish)": "Spanish",
+        "葡萄牙语 (Portuguese)": "Portuguese",
+        "德语 (German)": "German",
+        "法语 (French)": "French",
+        "意大利语 (Italian)": "Italian",
+        "印尼语 (Indonesian)": "Indonesian",
+        "印地语 (Hindi)": "Hindi",
+        "泰语 (Thai)": "Thai",
+        "马来语 (Malay)": "Malay",
+        "中文（繁体） (Traditional Chinese)": "Traditional Chinese"
+    }
+
+    target_display = st.selectbox("目标语言", list(LANG_OPTIONS.keys()))
+    target_lang = LANG_OPTIONS[target_display]
+    # target_lang = st.selectbox("目标语言", ["English","Japanese","Korean","Spanish","French","German","Thai","Vietnamese","Arabic","Traditional Chinese"])
 
     if st.button("开始批量翻译"):
         if not input_dir or not os.path.exists(input_dir):
