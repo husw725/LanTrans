@@ -7,7 +7,7 @@ cd /d %PROJECT_DIR%
 REM -------------------------------
 REM 检查是否存在 venv
 IF NOT EXIST "venv" (
-    echo "虚拟环境不存在，正在创建..."
+    echo "Venv not found, creating one..."
     python -m venv venv
 )
 
@@ -17,13 +17,13 @@ call venv\Scripts\activate
 
 REM -------------------------------
 REM 安装依赖
-echo "正在安装依赖..."
+echo "Installing dependencies..."
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 REM -------------------------------
 REM 启动 Streamlit
-echo "启动 Streamlit..."
+echo "Starting Streamlit..."
 streamlit run main.py
 
 pause
