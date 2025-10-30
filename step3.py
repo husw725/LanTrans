@@ -115,7 +115,7 @@ def run():
         # 阴影层
         shadow_clip = TextClip(
             subtitle_text,
-            fontsize=font_size,
+            fontsize=font_size+1,
             color=shadow_color,
             method="caption",
             size=(max_text_width, None),
