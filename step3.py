@@ -5,26 +5,49 @@ from PIL import Image
 import pysrt
 import os
 
-#check if running on windows
+# check if running on windows
 is_windows = os.name == "nt"
 if is_windows:
     import moviepy.config as mpy_config
     mpy_config.change_settings({
         "IMAGEMAGICK_BINARY": r"C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick.exe"
     })
-    font_path = r"C:\Windows\Fonts\arial.ttf"
+    default_font_path = r"C:\Windows\Fonts\arial.ttf"
 else:
-    font_path = "Arial"
+    default_font_path = "Arial"
 
 # ===================== 工具函数 =====================
 def srt_time_to_seconds(t):
     """将 pysrt.SubRipTime 转为秒(float)."""
     return t.hours * 3600 + t.minutes * 60 + t.seconds + t.milliseconds / 1000
 
-def generate_subtitle_clips(subs, h, style):
+def generate_subtitle_clips(subs,w, h, style):
     """根据 SRT 生成字幕 TextClip 列表."""
     clips = []
+    shadow_offset = style.get("shadow_offset", (5, 5))  # 阴影偏移 (x, y)
+
     for sub in subs:
+        # 阴影层
+        bg_kwargs = {
+            "fontsize": style["font_size"]+1,
+            "color": style["shadow_color"],
+            "method": "caption",
+            "size": (style["max_text_width"], None),
+            "align": "center",
+            "font": style["font_path"],
+        }
+        shadow_clip = TextClip(sub.text, **bg_kwargs).set_opacity(style["shadow_opacity"])
+        x_offset, y_offset = shadow_offset
+        shadow_clip = shadow_clip.set_position((
+            w / 2 - shadow_clip.w / 2 + x_offset,  # 水平居中 + 偏移
+            h - style["bottom_offset"] + y_offset  # 底部 + 垂直偏移
+        )) 
+        # shadow_clip = shadow_clip.set_position((
+        #     "center",
+        #     h - style["bottom_offset"] + shadow_offset[1]
+        # ))
+
+        # 白色文字层
         txt_kwargs = {
             "fontsize": style["font_size"],
             "color": style["font_color"],
@@ -33,14 +56,17 @@ def generate_subtitle_clips(subs, h, style):
             "method": "caption",
             "size": (style["max_text_width"], None),
             "align": "center",
-            "font": font_path,
+            "font": style["font_path"],
         }
         txt_clip = TextClip(sub.text, **txt_kwargs)
         txt_clip = txt_clip.set_position(("center", h - style["bottom_offset"]))
+
         start = srt_time_to_seconds(sub.start)
         end = srt_time_to_seconds(sub.end)
+        shadow_clip = shadow_clip.set_start(start).set_end(end)
         txt_clip = txt_clip.set_start(start).set_end(end)
-        clips.append(txt_clip)
+
+        clips.extend([shadow_clip, txt_clip])
     return clips
 
 # ===================== 主程序 =====================
@@ -50,6 +76,15 @@ def run():
     # ---------- Step 1: 样式预览 ----------
     st.subheader("🎨 Step 1: 字幕样式可视化调整")
     preview_video = st.file_uploader("选择一个视频用于字幕样式预览", type=["mp4", "mov", "mkv"])
+
+    # 上传自定义字体
+    uploaded_font = st.sidebar.file_uploader("上传自定义字体 (.ttf)", type=["ttf"])
+    font_path = default_font_path
+    if uploaded_font:
+        font_path = Path("uploaded_font.ttf")
+        with open(font_path, "wb") as f:
+            f.write(uploaded_font.read())
+        st.sidebar.success("✅ 自定义字体已加载")
 
     if preview_video:
         temp_video_path = Path("temp_preview_video.mp4")
@@ -63,13 +98,32 @@ def run():
         subtitle_text = "I am subtitle"
         font_size = st.sidebar.slider("字体大小", 12, 80, 36)
         font_color = st.sidebar.color_picker("字体颜色", "#FFFFFF")
-        stroke_color = st.sidebar.color_picker("描边颜色", "#000000")
+        stroke_color = st.sidebar.color_picker("描边颜色", "#ffffff")
         stroke_width = st.sidebar.slider("描边宽度", 0, 5, 1)
-        bottom_offset = st.sidebar.slider("字幕距离视频底部 (像素)", 0, 300, 100)
+        bottom_offset = st.sidebar.slider("字幕距离视频底部 (像素)", 0, 1000, 100)  # 最大1000
         width_ratio = st.sidebar.slider("字幕最大宽度占视频比例", 0.2, 1.0, 0.6, step=0.05)
+
+        # 阴影参数
+        shadow_color = st.sidebar.color_picker("阴影颜色", "#000000")
+        shadow_opacity = st.sidebar.slider("阴影透明度", 0.0, 1.0, 0.6, step=0.05)
+        shadow_offset_x = st.sidebar.slider("阴影水平偏移 (像素)", -20, 20, 5)
+        shadow_offset_y = st.sidebar.slider("阴影垂直偏移 (像素)", -20, 20, 5)
+        shadow_offset = (shadow_offset_x, shadow_offset_y)
 
         max_text_width = int(w * width_ratio)
 
+        # 阴影层
+        shadow_clip = TextClip(
+            subtitle_text,
+            fontsize=font_size,
+            color=shadow_color,
+            method="caption",
+            size=(max_text_width, None),
+            align="center",
+            font=font_path,
+        ).set_opacity(shadow_opacity).set_position(("center", h - bottom_offset + shadow_offset[1]))
+
+        # 白色文字层
         txt_clip = TextClip(
             subtitle_text,
             fontsize=font_size,
@@ -80,22 +134,24 @@ def run():
             size=(max_text_width, None),
             align="center",
             font=font_path,
-        )
-        txt_clip = txt_clip.set_position(("center", h - bottom_offset))
-        txt_clip = txt_clip.set_duration(5)
+        ).set_position(("center", h - bottom_offset))
 
-        preview_clip = CompositeVideoClip([clip.subclip(0, 5), txt_clip])
+        preview_clip = CompositeVideoClip([clip.subclip(0, 5), shadow_clip, txt_clip])
         frame = preview_clip.get_frame(1.0)
-        st.image(Image.fromarray(frame), caption="字幕样式预览", width="stretch")
+        st.image(Image.fromarray(frame), caption="字幕样式预览", width=None)
 
         # 保存样式配置
         style = {
+            "font_path": str(font_path),
             "font_size": font_size,
             "font_color": font_color,
             "stroke_color": stroke_color,
             "stroke_width": stroke_width,
             "bottom_offset": bottom_offset,
             "max_text_width": max_text_width,
+            "shadow_color": shadow_color,
+            "shadow_opacity": shadow_opacity,
+            "shadow_offset": shadow_offset,
         }
         st.session_state["subtitle_style"] = style
         st.success("✅ 样式设置已保存，可用于批量字幕添加。")
@@ -163,7 +219,7 @@ def run():
             style["max_text_width"] = int(w * (style["max_text_width"] / w))  # 保持比例
 
             subs = pysrt.open(srt_path)
-            subtitle_clips = generate_subtitle_clips(subs, h, style)
+            subtitle_clips = generate_subtitle_clips(subs, w,h, style)
 
             video = CompositeVideoClip([clip, *subtitle_clips])
             st.write(f"🎞️ 正在处理: {video_name}")
