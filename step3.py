@@ -138,7 +138,8 @@ def run():
 
         preview_clip = CompositeVideoClip([clip.subclip(0, 5), shadow_clip, txt_clip])
         frame = preview_clip.get_frame(1.0)
-        st.image(Image.fromarray(frame), caption="字幕样式预览", width=None)
+        width = "stretch" if is_windows else None
+        st.image(Image.fromarray(frame), caption="字幕样式预览", width=width)
 
         # 保存样式配置
         style = {
