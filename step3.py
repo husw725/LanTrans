@@ -224,7 +224,21 @@ def run():
 
             video = CompositeVideoClip([clip, *subtitle_clips])
             st.write(f"🎞️ 正在处理: {video_name}")
-            video.write_videofile(output_path, codec="libx264", audio_codec="aac", threads=4, logger=None)
+            # video.write_videofile(output_path, codec="libx264", audio_codec="aac", threads=4, logger=None)
+            video.write_videofile(
+                output_path,
+                codec="libx264",
+                audio_codec="aac",
+                preset="slow",
+                ffmpeg_params=[
+                    "-crf", "20",
+                    "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart",
+                ],
+                threads=4,
+                fps=clip.fps,
+                logger=None
+            )
 
             progress.progress((i + 1) / total)
             st.success(f"✅ {video_name} 已处理完成")
