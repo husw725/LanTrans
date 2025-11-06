@@ -43,6 +43,8 @@ def run():
         "印地语 (Hindi)": "Hindi",
         "泰语 (Thai)": "Thai",
         "马来语 (Malay)": "Malay",
+        "日本语 (Japanese)": "Japanese",
+        "韩语 (Korean)": "Korean",
         "中文（繁体） (Traditional Chinese)": "Traditional Chinese"
     }
 
