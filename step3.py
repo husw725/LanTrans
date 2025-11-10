@@ -89,18 +89,18 @@ def run():
 
         st.sidebar.header("🎨 字幕样式设置")
         subtitle_text = "I am subtitle"
-        font_size = st.sidebar.slider("字体大小", 12, 80, 36)
+        font_size = st.sidebar.slider("字体大小", 12, 80, 66)
         font_color = st.sidebar.color_picker("字体颜色", "#FFFFFF")
         stroke_color = st.sidebar.color_picker("描边颜色", "#ffffff")
         stroke_width = st.sidebar.slider("描边宽度", 0, 5, 1)
-        bottom_offset = st.sidebar.slider("字幕距离视频底部 (像素)", 0, 1000, 100)
-        width_ratio = st.sidebar.slider("字幕最大宽度占视频比例", 0.2, 1.0, 0.6, step=0.05)
+        bottom_offset = st.sidebar.slider("字幕距离视频底部 (像素)", 0, 1000, 574)
+        width_ratio = st.sidebar.slider("字幕最大宽度占视频比例", 0.2, 1.0, 0.75, step=0.05)
 
         # 阴影参数
         shadow_color = st.sidebar.color_picker("阴影颜色", "#000000")
-        shadow_opacity = st.sidebar.slider("阴影透明度", 0.0, 1.0, 0.6, step=0.05)
-        shadow_offset_x = st.sidebar.slider("阴影水平偏移 (像素)", -20, 20, 5)
-        shadow_offset_y = st.sidebar.slider("阴影垂直偏移 (像素)", -20, 20, 5)
+        shadow_opacity = st.sidebar.slider("阴影透明度", 0.0, 1.0, 0.75, step=0.05)
+        shadow_offset_x = st.sidebar.slider("阴影水平偏移 (像素)", -20, 20, 2)
+        shadow_offset_y = st.sidebar.slider("阴影垂直偏移 (像素)", -20, 20, 3)
         shadow_offset = (shadow_offset_x, shadow_offset_y)
 
         max_text_width = int(w * width_ratio)
@@ -188,7 +188,8 @@ def run():
         if match_mode == "按排序顺序对应" and len(video_files) != len(srt_files):
             st.warning("⚠️ 视频文件数量与 SRT 文件数量不一致！")
             return
-
+        else:
+            st.warning(f"⚠️ 找到 {len(video_files)} 个视频文件 和 {len(srt_files)} 个 SRT 文件。  {match_mode}")
         progress = st.progress(0)
         total = len(video_files)
 
