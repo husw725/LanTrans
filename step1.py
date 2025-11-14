@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 模型费用表
 MODEL_COST = {
+    "gpt-5.1": {"input": 1.25, "output": 10.0},  
     "gpt-5": {"input": 1.25, "output": 10.0},       # $/1M tokens
     "gpt-5-mini": {"input": 0.25, "output": 2.0},
     "gpt-5-nano": {"input": 0.05, "output": 0.4},
@@ -52,8 +53,8 @@ def run():
     target_langs = [LANG_OPTIONS[d] for d in target_displays]
 
     # 模型选择
-    translate_model = st.selectbox("翻译模型", [ "gpt-5","gpt-5-mini", "gpt-5-nano"], index=0)
-    memory_model = st.selectbox("Memory 更新模型", [ "gpt-5","gpt-5-mini", "gpt-5-nano",], index=0)
+    translate_model = st.selectbox("翻译模型", [ "gpt-5.1","gpt-5","gpt-5-mini", "gpt-5-nano"], index=0)
+    memory_model = st.selectbox("Memory 更新模型", [ "gpt-5.1","gpt-5","gpt-5-mini", "gpt-5-nano",], index=0)
 
     reset = st.checkbox("重新开始所有语言的翻译？", key="reset_all")
 
