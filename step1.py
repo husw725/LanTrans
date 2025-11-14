@@ -53,8 +53,8 @@ def run():
     target_langs = [LANG_OPTIONS[d] for d in target_displays]
 
     # 模型选择
-    translate_model = st.selectbox("翻译模型", [ "gpt-5.1","gpt-5","gpt-5-mini", "gpt-5-nano"], index=0)
-    memory_model = st.selectbox("Memory 更新模型", [ "gpt-5.1","gpt-5","gpt-5-mini", "gpt-5-nano",], index=0)
+    translate_model = st.selectbox("翻译模型", [ "gpt-5.1","gpt-5-mini", "gpt-5-nano"], index=0)
+    memory_model = st.selectbox("Memory 更新模型", [ "gpt-5.1","gpt-5-mini", "gpt-5-nano",], index=0)
 
     reset = st.checkbox("重新开始所有语言的翻译？", key="reset_all")
 
