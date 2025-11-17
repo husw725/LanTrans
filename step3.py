@@ -5,6 +5,7 @@ from PIL import Image
 import pysrt
 import os
 
+
 # check if running on windows
 is_windows = os.name == "nt"
 if is_windows:
@@ -21,15 +22,32 @@ def srt_time_to_seconds(t):
     """将 pysrt.SubRipTime 转为秒(float)."""
     return t.hours * 3600 + t.minutes * 60 + t.seconds + t.milliseconds / 1000
 
+def safe_text(text):
+    """强制确保文本为 UTF-8，并过滤掉 MoviePy / ImageMagick 无法解析的字符."""
+    if not text:
+        return ""
+    try:
+        cleaned = text.encode("utf-8", "ignore").decode("utf-8", "ignore")
+    except:
+        cleaned = text
+
+    # 删除不可见的控制字符（如 SRT 中常见隐藏换行、RTL 控制符等）
+    cleaned = "".join(ch for ch in cleaned if ord(ch) >= 32 or ch in "\n\t")
+
+    return cleaned.strip()
+
+
 def generate_subtitle_clips(subs, w, h, style):
-    """根据 SRT 生成字幕 TextClip 列表."""
+    """根据 SRT 生成字幕 TextClip 列表 (加入 UTF-8 清洗)."""
     clips = []
     shadow_offset = style.get("shadow_offset", (5, 5))
 
     for sub in subs:
+        safe_txt = safe_text(sub.text)   # ⬅️ 核心补丁：清洗字幕
+
         # 阴影层
         shadow_clip = TextClip(
-            sub.text,
+            safe_txt,
             fontsize=style["font_size"] + 1,
             color=style["shadow_color"],
             method="caption",
@@ -43,7 +61,7 @@ def generate_subtitle_clips(subs, w, h, style):
 
         # 主文字层
         txt_clip = TextClip(
-            sub.text,
+            safe_txt,
             fontsize=style["font_size"],
             color=style["font_color"],
             stroke_color=style["stroke_color"],
@@ -56,11 +74,13 @@ def generate_subtitle_clips(subs, w, h, style):
 
         start = srt_time_to_seconds(sub.start)
         end = srt_time_to_seconds(sub.end)
+
         shadow_clip = shadow_clip.set_start(start).set_end(end)
         txt_clip = txt_clip.set_start(start).set_end(end)
-
         clips.extend([shadow_clip, txt_clip])
+
     return clips
+
 
 
 # ===================== 主程序 =====================
