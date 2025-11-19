@@ -6,6 +6,8 @@ import json
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dotenv import load_dotenv
+load_dotenv()
 
 # 模型费用表
 MODEL_COST = {

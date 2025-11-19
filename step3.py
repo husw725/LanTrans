@@ -4,6 +4,8 @@ from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from PIL import Image
 import pysrt
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 
 # check if running on windows
@@ -11,7 +13,7 @@ is_windows = os.name == "nt"
 if is_windows:
     import moviepy.config as mpy_config
     mpy_config.change_settings({
-        "IMAGEMAGICK_BINARY": r"C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick.exe"
+        "IMAGEMAGICK_BINARY": os.getenv("IMAGEMAGICK_BINARY"),
     })
     default_font_path = r"C:\Windows\Fonts\arial.ttf"
 else:
