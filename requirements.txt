@@ -2,3 +2,4 @@ openai
 streamlit
 pysrt
 moviepy
+dotenv
