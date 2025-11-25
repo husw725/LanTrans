@@ -1,31 +1,24 @@
 import streamlit as st
 from openai import OpenAI
-# from key import key as API_KEY
 import os
 import json
-import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 load_dotenv()
 
 # --- UI & Cost Models ---
-
-# 模型费用表 (保持不变)
 MODEL_COST = {
     "gpt-5.1": {"input": 1.25, "output": 10.0},
     "gpt-5": {"input": 1.25, "output": 10.0},
     "gpt-5-mini": {"input": 0.25, "output": 2.0},
     "gpt-5-nano": {"input": 0.05, "output": 0.4},
 }
-
 LANG_OPTIONS = {
     "阿拉伯语 (Arabic)": "Arabic", "英语 (English)": "English", "西班牙语 (Spanish)": "Spanish",
     "葡萄牙语 (Portuguese)": "Portuguese", "德语 (German)": "German", "法语 (French)": "French",
     "意大利语 (Italian)": "Italian", "印尼语 (Indonesian)": "Indonesian", "印地语 (Hindi)": "Hindi",
     "泰语 (Thai)": "Thai", "马来语 (Malay)": "Malay", "日本语 (Japanese)": "Japanese",
-    "韩语 (Korean)": "Korean", "中文（繁体） (Traditional Chinese)": "Traditional Chinese",
-    "中文（简体） (Simplified Chinese)": "Simplified Chinese",
+    "韩语 (Korean)": "Korean", "中文（繁体） (Traditional Chinese)": "Traditional Chinese"
 }
 
 def estimate_cost(input_tokens, output_tokens, model):
@@ -35,12 +28,18 @@ def estimate_cost(input_tokens, output_tokens, model):
 
 # --- Main Application ---
 def run():
-    client = OpenAI()
+    # Attempt to initialize OpenAI client from environment variables
+    try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    except Exception as e:
+        st.error(f"OpenAI API 密钥初始化失败，请检查您的 .env 文件: {e}")
+        return
+
     TEMP_DIR = Path("./temp")
     TEMP_DIR.mkdir(exist_ok=True)
 
     st.header("📝 Step 1: 批量多语言翻译 SRT")
-    st.caption("使用 AI 批量翻译 SRT 字幕文件，支持多语言并发处理和成本估算。")
+    st.caption("使用 AI 批量翻译 SRT 字幕文件，提供实时进度和成本估算。")
 
     # --- UI Layout ---
     with st.container(border=True):
@@ -55,7 +54,6 @@ def run():
         st.subheader("⚙️ 翻译设置")
         target_displays = st.multiselect("选择目标语言（可多选）", list(LANG_OPTIONS.keys()))
         target_langs = [LANG_OPTIONS[d] for d in target_displays]
-
         m_col1, m_col2 = st.columns(2)
         with m_col1:
             translate_model = st.selectbox("翻译模型", ["gpt-5.1", "gpt-5-mini", "gpt-5-nano"], index=0)
@@ -69,24 +67,26 @@ def run():
 
     if st.button("🚀 开始批量翻译", type="primary", use_container_width=True):
         # --- Input Validation ---
-        if not input_dir or not os.path.exists(input_dir):
-            st.warning("请提供有效的输入文件夹路径！")
+        if not all([input_dir, output_root, target_langs]) or not os.path.exists(input_dir):
+            st.warning("请确保所有路径均已正确填写，并至少选择一种目标语言。")
             return
-        if not output_root:
-            st.warning("请提供输出文件夹路径！")
-            return
-        if not target_langs:
-            st.warning("请选择至少一种语言！")
-            return
-
         srt_files = sorted([f for f in os.listdir(input_dir) if f.lower().endswith(".srt")])
         if not srt_files:
             st.warning("输入文件夹中没有找到 SRT 文件！")
             return
 
-        # --- Processing Logic ---
-        def process_language(lang):
-            # (处理逻辑与原版相同)
+        # --- Sequential Processing for Real-time Feedback ---
+        total_files_to_process = len(srt_files) * len(target_langs)
+        files_processed = 0
+        
+        progress_bar = st.progress(0, text="任务准备就绪...")
+        log_container = st.container(height=300, border=True)
+        total_cost_all_langs = 0.0
+
+        for lang in target_langs:
+            lang_total_cost = 0.0
+            log_container.markdown(f"--- \n### 🟢 开始处理语言: **{lang}**")
+            
             memory_path = TEMP_DIR / f"drama_memory_{lang}.json"
             output_dir = Path(output_root) / lang
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -98,38 +98,36 @@ def run():
                 memory = json.load(open(memory_path, "r", encoding="utf-8")) if memory_path.exists() else {}
             except json.JSONDecodeError:
                 memory = {}
-            
             if not memory:
-                 memory = {"episode_count": 0, "characters": {}, "terminology": {}, "style_notes": ""}
-
-
-            results = []
-            total_cost = 0.0
+                memory = {"episode_count": 0, "characters": {}, "terminology": {}, "style_notes": ""}
 
             for srt_file in srt_files:
+                files_processed += 1
+                progress_text = f"进度: {files_processed}/{total_files_to_process} | 当前: {srt_file} ({lang})"
+                progress_bar.progress(files_processed / total_files_to_process, text=progress_text)
+                
                 output_path = output_dir / srt_file
                 if output_path.exists():
-                    results.append(f"➡️ 跳过 {lang} - {srt_file}")
+                    log_container.info(f"➡️ 跳过 {lang} - {srt_file}")
                     continue
 
-                with open(Path(input_dir) / srt_file, "r", encoding="utf-8") as f:
-                    srt_content = f.read()
-
-                system_prompt = f"You are a professional subtitle translator for short dramas. Translate subtitles into {lang} while preserving SRT format, tone, and style. Current memory: {memory}. Do not add any translator notes outside of SRT."
-                user_prompt = f"Translate the following subtitles:\n{srt_content}"
-
                 try:
+                    with open(Path(input_dir) / srt_file, "r", encoding="utf-8") as f:
+                        srt_content = f.read()
+
+                    system_prompt = f"You are a professional subtitle translator... Current memory: {memory} ... into {lang} ..."
+                    user_prompt = f"Translate the following subtitles:\n{srt_content}"
+                    
                     resp = client.chat.completions.create(
                         model=translate_model,
                         messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
                     )
                     translated_srt = resp.choices[0].message.content.strip()
-                    input_tokens = len(system_prompt.split()) + len(user_prompt.split())
-                    output_tokens = len(translated_srt.split())
-                    cost = estimate_cost(input_tokens, output_tokens, translate_model)
-                    total_cost += cost
+                    
+                    cost = estimate_cost(len(system_prompt.split()) + len(user_prompt.split()), len(translated_srt.split()), translate_model)
+                    lang_total_cost += cost
 
-                    update_prompt = f"Analyze the following translated SRT and update the memory for characters, terminology, and style notes. Previous memory: {memory}. Translated SRT:\n{translated_srt}. Output the updated memory in JSON format."
+                    update_prompt = f"Analyze the translated SRT and update the memory... Previous: {memory} Translated:\n{translated_srt} ..."
                     upd_resp = client.chat.completions.create(
                         model=memory_model,
                         messages=[{"role": "system", "content": "You are a memory updater..."}, {"role": "user", "content": update_prompt}]
@@ -140,41 +138,14 @@ def run():
 
                     with open(output_path, "w", encoding="utf-8") as f:
                         f.write(translated_srt)
-                    results.append(f"✅ 完成 {lang} - {srt_file}, 费用 ${cost:.4f}")
+                    log_container.success(f"✅ 完成 {lang} - {srt_file} (费用: ${cost:.4f})")
 
                 except Exception as e:
-                    results.append(f"❌ {lang} - {srt_file} 翻译失败: {e}")
+                    log_container.error(f"❌ {lang} - {srt_file} 翻译失败: {e}")
                     continue
             
-            results.append(f"💰 {lang} 总费用: ${total_cost:.4f}")
-            return results
-
-        # --- Concurrent Execution & Display ---
-        progress_bar = st.progress(0, text="任务准备就绪...")
-        log_container = st.container(height=300, border=True)
-        total_tasks = len(target_langs)
-        completed_tasks = 0
-
-        with ThreadPoolExecutor(max_workers=min(total_tasks, 4)) as executor:
-            futures = {executor.submit(process_language, lang): lang for lang in target_langs}
-            for future in as_completed(futures):
-                lang = futures[future]
-                try:
-                    result_list = future.result()
-                    for msg in result_list:
-                        if "✅" in msg:
-                            log_container.success(msg)
-                        elif "➡️" in msg:
-                             log_container.info(msg)
-                        elif "❌" in msg or "⚠️" in msg:
-                            log_container.warning(msg)
-                        else:
-                            log_container.write(msg)
-                except Exception as e:
-                    log_container.error(f"{lang} 处理时发生严重错误: {e}")
-                
-                completed_tasks += 1
-                progress_bar.progress(completed_tasks / total_tasks, text=f"正在翻译: {completed_tasks}/{total_tasks} 种语言已完成")
+            log_container.markdown(f"💰 **{lang}** 总费用: **${lang_total_cost:.4f}**")
+            total_cost_all_langs += lang_total_cost
 
         st.balloons()
-        st.success("🎉 所有语言翻译完成！")
+        st.success(f"🎉 所有翻译任务完成！总预估费用: ${total_cost_all_langs:.4f}")
