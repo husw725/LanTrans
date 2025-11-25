@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 from dotenv import load_dotenv
+import re
 load_dotenv()
 
 # --- UI & Cost Models ---
@@ -18,8 +19,7 @@ LANG_OPTIONS = {
     "葡萄牙语 (Portuguese)": "Portuguese", "德语 (German)": "German", "法语 (French)": "French",
     "意大利语 (Italian)": "Italian", "印尼语 (Indonesian)": "Indonesian", "印地语 (Hindi)": "Hindi",
     "泰语 (Thai)": "Thai", "马来语 (Malay)": "Malay", "日本语 (Japanese)": "Japanese",
-    "韩语 (Korean)": "Korean", "中文（繁体） (Traditional Chinese)": "Traditional Chinese",
-    "中文（简体） (Simplified Chinese)": "Simplified Chinese", 
+    "韩语 (Korean)": "Korean", "中文（繁体） (Traditional Chinese)": "Traditional Chinese"
 }
 
 def estimate_cost(input_tokens, output_tokens, model):
@@ -71,7 +71,14 @@ def run():
         if not all([input_dir, output_root, target_langs]) or not os.path.exists(input_dir):
             st.warning("请确保所有路径均已正确填写，并至少选择一种目标语言。")
             return
-        srt_files = sorted([f for f in os.listdir(input_dir) if f.lower().endswith(".srt")])
+        
+        # --- Natural Sort Implementation ---
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+            
+        all_files = [f for f in os.listdir(input_dir) if f.lower().endswith(".srt")]
+        srt_files = sorted(all_files, key=natural_sort_key)
+
         if not srt_files:
             st.warning("输入文件夹中没有找到 SRT 文件！")
             return
