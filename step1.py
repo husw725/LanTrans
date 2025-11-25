@@ -1,6 +1,6 @@
 import streamlit as st
 from openai import OpenAI
-from key import key as API_KEY
+# from key import key as API_KEY
 import os
 import json
 import time
@@ -34,7 +34,7 @@ def estimate_cost(input_tokens, output_tokens, model):
 
 # --- Main Application ---
 def run():
-    client = OpenAI(api_key=API_KEY)
+    client = OpenAI()
     TEMP_DIR = Path("./temp")
     TEMP_DIR.mkdir(exist_ok=True)
 
