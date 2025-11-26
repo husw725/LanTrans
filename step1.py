@@ -29,7 +29,6 @@ def estimate_cost(input_tokens, output_tokens, model):
 
 # --- Main Application ---
 def run():
-    # Attempt to initialize OpenAI client from environment variables
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     except Exception as e:
@@ -45,6 +44,7 @@ def run():
     # --- UI Layout ---
     with st.container(border=True):
         st.subheader("📁 路径设置")
+        # ... (UI code remains the same)
         col1, col2 = st.columns(2)
         with col1:
             input_dir = st.text_input("SRT 输入文件夹路径：", help="存放原始 `.srt` 文件的文件夹。")
@@ -53,6 +53,7 @@ def run():
 
     with st.container(border=True):
         st.subheader("⚙️ 翻译设置")
+        # ... (UI code remains the same)
         target_displays = st.multiselect("选择目标语言（可多选）", list(LANG_OPTIONS.keys()))
         target_langs = [LANG_OPTIONS[d] for d in target_displays]
         m_col1, m_col2 = st.columns(2)
@@ -67,15 +68,12 @@ def run():
     st.divider()
 
     if st.button("🚀 开始批量翻译", type="primary", use_container_width=True):
-        # --- Input Validation ---
         if not all([input_dir, output_root, target_langs]) or not os.path.exists(input_dir):
             st.warning("请确保所有路径均已正确填写，并至少选择一种目标语言。")
             return
         
-        # --- Natural Sort Implementation ---
         def natural_sort_key(s):
             return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
-            
         all_files = [f for f in os.listdir(input_dir) if f.lower().endswith(".srt")]
         srt_files = sorted(all_files, key=natural_sort_key)
 
@@ -83,10 +81,8 @@ def run():
             st.warning("输入文件夹中没有找到 SRT 文件！")
             return
 
-        # --- Sequential Processing for Real-time Feedback ---
         total_files_to_process = len(srt_files) * len(target_langs)
         files_processed = 0
-        
         progress_bar = st.progress(0, text="任务准备就绪...")
         log_container = st.container(height=300, border=True)
         total_cost_all_langs = 0.0
@@ -119,11 +115,12 @@ def run():
                     log_container.info(f"➡️ 跳过 {lang} - {srt_file}")
                     continue
 
+                # --- Step 1: Perform Translation (Main Task) ---
                 try:
                     with open(Path(input_dir) / srt_file, "r", encoding="utf-8") as f:
                         srt_content = f.read()
 
-                    system_prompt = f"You are a professional subtitle translator... Current memory: {memory} ... into {lang} ..."
+                    system_prompt = f"You are a professional subtitle translator for short dramas. Translate subtitles into {lang} while preserving SRT format, tone, and style. Current memory: {json.dumps(memory, ensure_ascii=False)}. Do not add any translator notes outside of SRT."
                     user_prompt = f"Translate the following subtitles:\n{srt_content}"
                     
                     resp = client.chat.completions.create(
@@ -135,18 +132,33 @@ def run():
                     cost = estimate_cost(len(system_prompt.split()) + len(user_prompt.split()), len(translated_srt.split()), translate_model)
                     lang_total_cost += cost
 
-                    update_prompt = f"Analyze the translated SRT and update the memory... Previous: {memory} Translated:\n{translated_srt} ..."
-                    upd_resp = client.chat.completions.create(
-                        model=memory_model,
-                        messages=[{"role": "system", "content": "You are a memory updater..."}, {"role": "user", "content": update_prompt}]
-                    )
-                    new_memory = json.loads(upd_resp.choices[0].message.content.strip())
-                    memory.update(new_memory)
-                    json.dump(memory, open(memory_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-
+                    # --- Step 2: Save Result Immediately ---
                     with open(output_path, "w", encoding="utf-8") as f:
                         f.write(translated_srt)
                     log_container.success(f"✅ 完成 {lang} - {srt_file} (费用: ${cost:.4f})")
+
+                    # --- Step 3: Attempt to Update Memory (Safely) ---
+                    try:
+                        mem_system_prompt = "You are an assistant that updates a JSON object. ONLY output a valid, raw JSON object without explanations or markdown."
+                        mem_user_prompt = f"Analyze the following translated SRT and update the memory JSON. Previous memory: {json.dumps(memory, ensure_ascii=False)}. Translated SRT:\n{translated_srt}. Return the complete updated JSON."
+                        
+                        upd_resp = client.chat.completions.create(
+                            model=memory_model,
+                            messages=[{"role": "system", "content": mem_system_prompt}, {"role": "user", "content": mem_user_prompt}]
+                        )
+                        response_text = upd_resp.choices[0].message.content.strip()
+                        
+                        if response_text:
+                            new_memory = json.loads(response_text)
+                            memory.update(new_memory)
+                            json.dump(memory, open(memory_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+                        else:
+                            log_container.warning(f"⚠️ {srt_file} 的记忆更新返回为空，本次记忆未更新。")
+
+                    except json.JSONDecodeError:
+                        log_container.warning(f"⚠️ {srt_file} 的记忆更新未能生成有效JSON，本次记忆未更新。")
+                    except Exception as mem_e:
+                        log_container.warning(f"⚠️ 更新 {srt_file} 的记忆时出错: {mem_e}，本次记忆未更新。")
 
                 except Exception as e:
                     log_container.error(f"❌ {lang} - {srt_file} 翻译失败: {e}")
