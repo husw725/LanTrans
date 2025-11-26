@@ -196,4 +196,4 @@ def run():
                     pass
         
         st.balloons()
-        st.success(f"🎉 所有翻译任务完成！总预估费用: ${total_cost_all_langs:.4f}")
+        st.success(f'''🎉 所有翻译任务完成！总预估费用: ${total_cost_all_langs:.4f}'''))
