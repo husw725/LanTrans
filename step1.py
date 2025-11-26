@@ -5,9 +5,7 @@ import json
 from pathlib import Path
 from dotenv import load_dotenv
 import re
-from concurrent.futures import ThreadPoolExecutor
-import queue
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 load_dotenv()
 
 # --- UI & Cost Models ---
@@ -23,7 +21,7 @@ LANG_OPTIONS = {
     "意大利语 (Italian)": "Italian", "印尼语 (Indonesian)": "Indonesian", "印地语 (Hindi)": "Hindi",
     "泰语 (Thai)": "Thai", "马来语 (Malay)": "Malay", "日本语 (Japanese)": "Japanese",
     "韩语 (Korean)": "Korean", "中文（繁体） (Traditional Chinese)": "Traditional Chinese",
-    "中文（简体） (Simplified Chinese)": "Simplified Chinese"
+    "中文（简体） (Simplified Chinese)": "Simplified Chinese" # Added Simplified Chinese
 }
 
 def estimate_cost(input_tokens, output_tokens, model):
@@ -31,16 +29,18 @@ def estimate_cost(input_tokens, output_tokens, model):
            (output_tokens / 1_000_000 * MODEL_COST[model]["output"])
     return cost
 
-# --- Helper Function for Parallel Processing with Queue ---
-def _process_single_language_with_queue(progress_queue, lang, srt_files, client, temp_dir, input_dir, output_root, translate_model, memory_model, reset):
+# --- Helper Function for Parallel Processing ---
+def _process_single_language(lang_to_process, srt_files_for_lang, client_instance, temp_dir_path, input_dir_path, output_root_path, translate_model_name, memory_model_name, reset_flag):
+    lang_results = [] # To store logs for this language
     lang_total_cost = 0.0
-    progress_queue.put({'type': 'log', 'status': 'markdown', 'message': f"--- \n### 🟢 开始处理语言: **{lang}**"})
+    lang_results.append(f'''--- 
+### 🟢 开始处理语言: **{lang_to_process}**''')
     
-    memory_path = temp_dir / f"drama_memory_{lang}.json"
-    output_dir = Path(output_root) / lang
+    memory_path = temp_dir_path / f"drama_memory_{lang_to_process}.json"
+    output_dir = Path(output_root_path) / lang_to_process
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if reset and memory_path.exists():
+    if reset_flag and memory_path.exists():
         memory_path.unlink()
     
     try:
@@ -50,36 +50,41 @@ def _process_single_language_with_queue(progress_queue, lang, srt_files, client,
     if not memory:
         memory = {"episode_count": 0, "characters": {}, "terminology": {}, "style_notes": ""}
 
-    for srt_file in srt_files:
+    for srt_file in srt_files_for_lang:
         output_path = output_dir / srt_file
         if output_path.exists():
-            progress_queue.put({'type': 'log', 'status': 'info', 'message': f"➡️ 跳过 {lang} - {srt_file}"})
-            progress_queue.put({'type': 'progress'}) # Still count as progress
+            lang_results.append(f"➡️ 跳过 {lang_to_process} - {srt_file}")
             continue
 
         try:
-            with open(Path(input_dir) / srt_file, "r", encoding="utf-8") as f:
+            with open(Path(input_dir_path) / srt_file, "r", encoding="utf-8") as f:
                 srt_content = f.read()
 
-            system_prompt = f"You are a professional subtitle translator... Current memory: {json.dumps(memory, ensure_ascii=False)}..."
-            user_prompt = f"Translate the following subtitles into {lang}:\n{srt_content}"
+            system_prompt = f"You are a professional subtitle translator for short dramas. Translate subtitles into {lang_to_process} while preserving SRT format, tone, and style. Current memory: {json.dumps(memory, ensure_ascii=False)}. Do not add any translator notes outside of SRT."
+            user_prompt = f"Translate the following subtitles:\n{srt_content}"
             
-            resp = client.chat.completions.create(model=translate_model, messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}])
+            resp = client_instance.chat.completions.create(
+                model=translate_model_name,
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+            )
             translated_srt = resp.choices[0].message.content.strip()
             
-            cost = estimate_cost(len(system_prompt.split()) + len(user_prompt.split()), len(translated_srt.split()), translate_model)
+            cost = estimate_cost(len(system_prompt.split()) + len(user_prompt.split()), len(translated_srt.split()), translate_model_name)
             lang_total_cost += cost
 
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(translated_srt)
-            progress_queue.put({'type': 'log', 'status': 'success', 'message': f"✅ 完成 {lang} - {srt_file} (费用: ${cost:.4f})")
+            lang_results.append(f"✅ 完成 {lang_to_process} - {srt_file} (费用: ${cost:.4f})")
 
-            # Attempt to Update Memory
+            # --- Attempt to Update Memory (Safely) ---
             try:
-                mem_system_prompt = "You are an assistant that updates a JSON object. ONLY output a valid, raw JSON object..."
-                mem_user_prompt = f"Analyze... Previous memory: {json.dumps(memory, ensure_ascii=False)}. Translated SRT:\n{translated_srt}. Return updated JSON."
+                mem_system_prompt = "You are an assistant that updates a JSON object. ONLY output a valid, raw JSON object without explanations or markdown."
+                mem_user_prompt = f"Analyze the following translated SRT and update the memory JSON. Previous memory: {json.dumps(memory, ensure_ascii=False)}. Translated SRT:\n{translated_srt}. Return the complete updated JSON."
                 
-                upd_resp = client.chat.completions.create(model=memory_model, messages=[{"role": "system", "content": mem_system_prompt}, {"role": "user", "content": mem_user_prompt}])
+                upd_resp = client_instance.chat.completions.create(
+                    model=memory_model_name,
+                    messages=[{"role": "system", "content": mem_system_prompt}, {"role": "user", "content": mem_user_prompt}]
+                )
                 response_text = upd_resp.choices[0].message.content.strip()
                 
                 if response_text:
@@ -87,23 +92,23 @@ def _process_single_language_with_queue(progress_queue, lang, srt_files, client,
                     memory.update(new_memory)
                     json.dump(memory, open(memory_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
                 else:
-                    progress_queue.put({'type': 'log', 'status': 'warning', 'message': f"⚠️ {srt_file} 的记忆更新返回为空。"})
+                    lang_results.append(f"⚠️ {srt_file} 的记忆更新返回为空，本次记忆未更新。")
+
+            except json.JSONDecodeError:
+                lang_results.append(f"⚠️ {srt_file} 的记忆更新未能生成有效JSON，本次记忆未更新。")
             except Exception as mem_e:
-                progress_queue.put({'type': 'log', 'status': 'warning', 'message': f"⚠️ 更新 {srt_file} 的记忆时出错: {mem_e}"})
+                lang_results.append(f"⚠️ 更新 {srt_file} 的记忆时出错: {mem_e}，本次记忆未更新。")
 
         except Exception as e:
-            progress_queue.put({'type': 'log', 'status': 'error', 'message': f"❌ {lang} - {srt_file} 翻译失败: {e}"})
-        
-        finally:
-            progress_queue.put({'type': 'progress'}) # Signal progress regardless of outcome
-
-    progress_queue.put({'type': 'log', 'status': 'markdown', 'message': f"💰 **{lang}** 总费用: **${lang_total_cost:.4f}**"})
-    progress_queue.put({'type': 'done', 'cost': lang_total_cost})
+            lang_results.append(f"❌ {lang_to_process} - {srt_file} 翻译失败: {e}")
+            continue
+    
+    lang_results.append(f"💰 **{lang_to_process}** 总费用: **${lang_total_cost:.4f}**")
+    return lang_results, lang_total_cost
 
 
 # --- Main Application ---
 def run():
-    # ... (UI and client setup code remains the same) ...
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     except Exception as e:
@@ -147,6 +152,7 @@ def run():
         
         def natural_sort_key(s):
             return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+            
         all_files = [f for f in os.listdir(input_dir) if f.lower().endswith(".srt")]
         srt_files = sorted(all_files, key=natural_sort_key)
 
@@ -154,46 +160,34 @@ def run():
             st.warning("输入文件夹中没有找到 SRT 文件！")
             return
 
-        # --- Concurrent Execution with Real-time Updates via Queue ---
-        progress_queue = queue.Queue()
-        total_files_to_process = len(srt_files) * len(target_langs)
-        completed_files = 0
-        
+        # --- Concurrent Execution & Display ---
         progress_bar = st.progress(0, text="任务准备就绪...")
         log_container = st.container(height=300, border=True)
-        
-        total_langs_to_process = len(target_langs)
-        completed_langs = 0
+        total_langs_count = len(target_langs)
+        completed_langs_count = 0
         total_cost_all_langs = 0.0
 
-        with ThreadPoolExecutor(max_workers=min(total_langs_to_process, 4)) as executor:
-            for lang in target_langs:
-                executor.submit(_process_single_language_with_queue, progress_queue, lang, srt_files, client, TEMP_DIR, input_dir, output_root, translate_model, memory_model, reset)
-
-            while completed_langs < total_langs_to_process:
+        with ThreadPoolExecutor(max_workers=min(total_langs_count, 4)) as executor:
+            futures = {executor.submit(_process_single_language, lang, srt_files, client, TEMP_DIR, input_dir, output_root, translate_model, memory_model, reset): lang for lang in target_langs}
+            for future in as_completed(futures):
+                lang = futures[future]
                 try:
-                    msg = progress_queue.get(timeout=1.0) # Wait for a message
+                    lang_results, lang_cost = future.result()
+                    for msg in lang_results:
+                        if "✅" in msg:
+                            log_container.success(msg)
+                        elif "➡️" in msg:
+                            log_container.info(msg)
+                        elif "❌" in msg or "⚠️" in msg:
+                            log_container.warning(msg)
+                        else:
+                            log_container.markdown(msg) # For markdown formatted messages
+                    total_cost_all_langs += lang_cost
+                except Exception as e:
+                    log_container.error(f"{lang} 处理时发生严重错误: {e}")
+                
+                completed_langs_count += 1
+                progress_bar.progress(completed_langs_count / total_langs_count, text=f"正在翻译: {completed_langs_count}/{total_langs_count} 种语言已完成")
 
-                    if msg['type'] == 'log':
-                        status = msg.get('status', 'info')
-                        if status == 'success': log_container.success(msg['message'])
-                        elif status == 'info': log_container.info(msg['message'])
-                        elif status == 'warning': log_container.warning(msg['message'])
-                        elif status == 'error': log_container.error(msg['message'])
-                        elif status == 'markdown': log_container.markdown(msg['message'])
-                    
-                    elif msg['type'] == 'progress':
-                        completed_files += 1
-                        progress_text = f"总进度: {completed_files}/{total_files_to_process} 文件已处理"
-                        progress_bar.progress(completed_files / total_files_to_process, text=progress_text)
-                    
-                    elif msg['type'] == 'done':
-                        completed_langs += 1
-                        total_cost_all_langs += msg.get('cost', 0)
-                        
-                except queue.Empty:
-                    # If queue is empty for a while, it might mean tasks are done or stalled
-                    pass
-        
         st.balloons()
-        st.success(f'''🎉 所有翻译任务完成！总预估费用: ${total_cost_all_langs:.4f}'''))
+        st.success(f"🎉 所有翻译任务完成！总预估费用: ${total_cost_all_langs:.4f}")
