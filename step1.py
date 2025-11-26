@@ -20,7 +20,8 @@ LANG_OPTIONS = {
     "葡萄牙语 (Portuguese)": "Portuguese", "德语 (German)": "German", "法语 (French)": "French",
     "意大利语 (Italian)": "Italian", "印尼语 (Indonesian)": "Indonesian", "印地语 (Hindi)": "Hindi",
     "泰语 (Thai)": "Thai", "马来语 (Malay)": "Malay", "日本语 (Japanese)": "Japanese",
-    "韩语 (Korean)": "Korean", "中文（繁体） (Traditional Chinese)": "Traditional Chinese"
+    "韩语 (Korean)": "Korean", "中文（繁体） (Traditional Chinese)": "Traditional Chinese",
+    "中文（简体） (Simplified Chinese)": "Simplified Chinese" # Added Simplified Chinese
 }
 
 def estimate_cost(input_tokens, output_tokens, model):
@@ -32,8 +33,8 @@ def estimate_cost(input_tokens, output_tokens, model):
 def _process_single_language(lang_to_process, srt_files_for_lang, client_instance, temp_dir_path, input_dir_path, output_root_path, translate_model_name, memory_model_name, reset_flag):
     lang_results = [] # To store logs for this language
     lang_total_cost = 0.0
-    lang_results.append(f"--- 
-### 🟢 开始处理语言: **{lang_to_process}**")
+    lang_results.append(f'''--- 
+### 🟢 开始处理语言: **{lang_to_process}**''')
     
     memory_path = temp_dir_path / f"drama_memory_{lang_to_process}.json"
     output_dir = Path(output_root_path) / lang_to_process
