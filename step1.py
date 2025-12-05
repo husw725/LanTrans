@@ -60,7 +60,15 @@ def _process_single_language(lang_to_process, srt_files_for_lang, client_instanc
             with open(Path(input_dir_path) / srt_file, "r", encoding="utf-8") as f:
                 srt_content = f.read()
 
-            system_prompt = f"You are a professional subtitle translator for short dramas. Translate subtitles into {lang_to_process} while preserving SRT format, tone, and style. Current memory: {json.dumps(memory, ensure_ascii=False)}. Do not add any translator notes outside of SRT."
+            system_prompt = f"""You are a professional subtitle translator for short dramas, specializing in localization. Your task is to translate subtitles into {lang_to_process}.
+- **Translate names into a localized form that is natural and culturally appropriate for {lang_to_process} speakers.** For example, if translating 'John' to Spanish, 'Juan' might be a good option.
+- Preserve the original SRT format, including timestamps.
+- Maintain the original tone and style of the dialogue.
+- Use the provided memory to ensure consistency for character names and terminology.
+- Do not add any translator notes or any text outside of the SRT format.
+
+Current memory: {json.dumps(memory, ensure_ascii=False)}
+"""
             user_prompt = f"Translate the following subtitles:\n{srt_content}"
             
             resp = client_instance.chat.completions.create(
@@ -79,7 +87,16 @@ def _process_single_language(lang_to_process, srt_files_for_lang, client_instanc
             # --- Attempt to Update Memory (Safely) ---
             try:
                 mem_system_prompt = "You are an assistant that updates a JSON object. ONLY output a valid, raw JSON object without explanations or markdown."
-                mem_user_prompt = f"Analyze the following translated SRT and update the memory JSON. Previous memory: {json.dumps(memory, ensure_ascii=False)}. Translated SRT:\n{translated_srt}. Return the complete updated JSON."
+                mem_user_prompt = f"""Analyze the translated SRT and update the memory JSON.
+- Identify character names and any specific terminology.
+- If a name has been localized, store both the original and the localized version in the 'characters' section.
+- Update the 'terminology' and 'style_notes' as needed.
+- Return the complete, updated JSON object.
+
+Previous memory: {json.dumps(memory, ensure_ascii=False)}
+Translated SRT:
+{translated_srt}
+"""
                 
                 upd_resp = client_instance.chat.completions.create(
                     model=memory_model_name,

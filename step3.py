@@ -1,7 +1,7 @@
 import streamlit as st
 from pathlib import Path
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
-from PIL import Image
+from PIL import Image, ImageFont
 import pysrt
 import os
 from dotenv import load_dotenv
@@ -27,25 +27,63 @@ def safe_text(text):
     cleaned = "".join(ch for ch in text if ord(ch) >= 32 or ch in "\n\t")
     return cleaned.strip()
 
+def wrap_text_pil(text, font_path, font_size, max_width):
+    """Wraps text using PIL for accurate width calculation."""
+    font = ImageFont.truetype(font_path, font_size)
+    lines = []
+    
+    for paragraph in text.split('\n'):
+        words = paragraph.split(' ')
+        current_line = ""
+        for word in words:
+            if not word: continue
+            
+            test_line = f"{current_line} {word}".strip()
+            
+            try:
+                line_width = font.getlength(test_line)
+            except AttributeError:
+                bbox = font.getbbox(test_line)
+                line_width = bbox[2] - bbox[0]
+
+            if line_width <= max_width:
+                current_line = test_line
+            else:
+                if not current_line:
+                    lines.append(word)
+                else:
+                    lines.append(current_line)
+                    current_line = word
+        
+        if current_line:
+            lines.append(current_line)
+            
+    return "\n".join(lines)
+
 def generate_subtitle_clips(subs, w, h, style):
     clips = []
     shadow_offset = style.get("shadow_offset", (2, 2))
+    shadow_font_size = style.get("shadow_font_size", style["font_size"])
+
     for sub in subs:
         safe_txt = safe_text(sub.text)
         if not safe_txt: continue
 
+        wrapped_text = wrap_text_pil(safe_txt, style["font_path"], style["font_size"], style["max_text_width"])
+
         # Shadow Layer
         shadow_clip = TextClip(
-            safe_txt, fontsize=style["font_size"], color=style["shadow_color"],
-            method="caption", size=(style["max_text_width"], None), align="center", font=style["font_path"]
+            wrapped_text, fontsize=shadow_font_size, color=style["shadow_color"],
+            method="label", align="center", font=style["font_path"]
         ).set_opacity(style["shadow_opacity"]).set_position((
             'center', h - style["bottom_offset"] + shadow_offset[1]
         ))
+        
         # Text Layer
         txt_clip = TextClip(
-            safe_txt, fontsize=style["font_size"], color=style["font_color"],
+            wrapped_text, fontsize=style["font_size"], color=style["font_color"],
             stroke_color=style["stroke_color"], stroke_width=style["stroke_width"],
-            method="caption", size=(style["max_text_width"], None), align="center", font=style["font_path"]
+            method="label", align="center", font=style["font_path"]
         ).set_position(('center', h - style["bottom_offset"]))
         
         start, end = srt_time_to_seconds(sub.start), srt_time_to_seconds(sub.end)
@@ -129,16 +167,19 @@ def run():
                 w, h = st.session_state['video_size']
 
                 # Create a dummy subtitle clip for preview
-                preview_text = "这是字幕预览"
+                preview_text = "这是字幕预览，这段文字会展示换行效果。"
+                wrapped_preview_text = wrap_text_pil(preview_text, style["font_path"], style["font_size"], style["max_text_width"])
+
                 txt_clip_preview = TextClip(
-                    preview_text, fontsize=style['font_size'], color=style['font_color'],
+                    wrapped_preview_text, fontsize=style['font_size'], color=style['font_color'],
                     stroke_color=style['stroke_color'], stroke_width=style['stroke_width'],
-                    method='caption', size=(style['max_text_width'], None), align='center', font=style['font_path']
+                    method='label', align='center', font=style['font_path']
                 ).set_position(('center', h - style['bottom_offset']))
                 
+                shadow_font_size = style.get("shadow_font_size", style["font_size"])
                 shadow_clip_preview = TextClip(
-                    preview_text, fontsize=style['font_size'], color=style['shadow_color'],
-                    method='caption', size=(style['max_text_width'], None), align='center', font=style['font_path']
+                    wrapped_preview_text, fontsize=shadow_font_size, color=style['shadow_color'],
+                    method='label', align='center', font=style['font_path']
                 ).set_opacity(style['shadow_opacity']).set_position(('center', h - style['bottom_offset'] + style['shadow_offset'][1]))
 
                 # Composite onto the frame
