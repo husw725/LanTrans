@@ -4,8 +4,6 @@ from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from PIL import Image
 import pysrt
 import os
-from dotenv import load_dotenv
-load_dotenv()
 
 
 # check if running on windows
@@ -13,7 +11,7 @@ is_windows = os.name == "nt"
 if is_windows:
     import moviepy.config as mpy_config
     mpy_config.change_settings({
-        "IMAGEMAGICK_BINARY": os.getenv("IMAGEMAGICK_BINARY"),
+        "IMAGEMAGICK_BINARY": r"C:\\Program Files\\ImageMagick-7.1.2-Q16-HDRI\\magick.exe"
     })
     default_font_path = r"C:\Windows\Fonts\arial.ttf"
 else:
@@ -50,7 +48,7 @@ def generate_subtitle_clips(subs, w, h, style):
         # 阴影层
         shadow_clip = TextClip(
             safe_txt,
-            fontsize=style["font_size"] + 1,
+            fontsize=style["font_size"],
             color=style["shadow_color"],
             method="caption",
             size=(style["max_text_width"], None),
@@ -129,7 +127,7 @@ def run():
 
         shadow_clip = TextClip(
             subtitle_text,
-            fontsize=font_size + 1,
+            fontsize=font_size,
             color=shadow_color,
             method="caption",
             size=(max_text_width, None),
