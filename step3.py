@@ -247,11 +247,26 @@ def run():
                 codec="libx264",
                 audio_codec="aac",
                 preset="slow",
+                # ffmpeg_params=[
+                #     "-crf", str(selected_crf),
+                #     "-pix_fmt", "yuv420p",
+                #     "-movflags", "+faststart",
+                # ],
                 ffmpeg_params=[
-                    "-crf", str(selected_crf),
-                    "-pix_fmt", "yuv420p",
-                    "-movflags", "+faststart",
-                ],
+    "-crf", str(selected_crf),
+    "-pix_fmt", "yuv420p",
+
+    # 色彩矩阵兜底
+    "-vf", "scale=in_color_matrix=bt601:out_color_matrix=bt709",
+
+    # 写入标准 BT.709 ColorInfo
+    "-colorspace", "bt709",
+    "-color_primaries", "bt709",
+    "-color_trc", "bt709",
+    "-color_range", "1",
+
+    "-movflags", "+faststart",
+]
                 threads=4,
                 fps=clip.fps,
                 logger=None
