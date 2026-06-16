@@ -3,3 +3,4 @@ temp/
 venv/
 key.py
 temp_*
+.env
