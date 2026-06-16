@@ -60,7 +60,7 @@ def run():
 
         with st.spinner("翻译中..."):
             response = client.chat.completions.create(
-                model="gpt-5",
+                model="gpt-5.4-mini",
                 messages=[
                     {"role":"system","content":system_prompt},
                     {"role":"user","content":user_prompt}
@@ -77,7 +77,7 @@ def run():
     Output the updated memory in JSON format.
     """
         update_resp = client.chat.completions.create(
-            model="gpt-5",
+            model="gpt-5.4-nano",
             messages=[
                 {"role":"system","content":"You are a memory updater for a subtitle translation system."},
                 {"role":"user","content":update_prompt}

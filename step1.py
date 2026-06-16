@@ -13,9 +13,13 @@ import logging
 # 配置日志，便于后台调试和查看文件读写状态
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- 成本配置 ---
+# --- 成本配置（美元/每百万 token，核对于 2026-06）---
+# 默认推荐 gpt-5.4-mini：比旧款 gpt-5.1 更便宜且质量更好。
 MODEL_COST = {
-    "gpt-5.2": {"input": 1.75, "output": 14.0},
+    "gpt-5.4-mini": {"input": 0.75, "output": 4.50},
+    "gpt-5.4": {"input": 2.50, "output": 15.0},
+    "gpt-5.4-nano": {"input": 0.20, "output": 1.25},
+    # 旧款保留以便回退对比
     "gpt-5.1": {"input": 1.25, "output": 10.0},
     "gpt-5-mini": {"input": 0.25, "output": 2.0},
     "gpt-5-nano": {"input": 0.05, "output": 0.4},
@@ -328,7 +332,7 @@ def run():
     target_displays = st.multiselect("🌐 选择目标语言（可多选）", list(LANG_OPTIONS.keys()), default=["英语 (English)"])
     target_langs = [LANG_OPTIONS[d] for d in target_displays]
 
-    translate_model = st.selectbox("🤖 翻译模型 (成本差异大，请谨慎选择)", list(MODEL_COST.keys()), index=1)
+    translate_model = st.selectbox("🤖 翻译模型 (成本差异大，请谨慎选择)", list(MODEL_COST.keys()), index=0)
     st.markdown(f"> 当前选中模型 `{translate_model}`，请注意其 [input/output] 价格：[${MODEL_COST[translate_model]['input']}/${MODEL_COST[translate_model]['output']}] 每百万 Token。")
     
     reset = st.checkbox("🔄 强制重置所有记忆？（将删除所有 temp 文件夹下的记忆文件）", key="reset_all")
