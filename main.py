@@ -1,52 +1,48 @@
 import streamlit as st
 
-import config
+import theme
 
 # --- Page Configuration ---
 st.set_page_config(
     page_title="LanTrans 视频翻译工具",
     page_icon="🎬",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
-# --- Sidebar Navigation ---
+theme.inject_css()
+
+# --- 导航状态 ---
+if "active_step" not in st.session_state:
+    st.session_state.active_step = "step1"
+
+# --- 顶部品牌栏 + 步骤进度条 ---
+theme.render_header()
+selected = theme.render_stepper(st.session_state.active_step)
+if selected != st.session_state.active_step:
+    st.session_state.active_step = selected
+    st.rerun()
+
+# --- 侧边栏（帮助 / 提示，折叠态） ---
 with st.sidebar:
-    st.image("https://img.icons8.com/nolan/64/movie-projector.png", width=60)
-    st.title("LanTrans 工具箱")
+    st.markdown("### 🎬 LanTrans 工具箱")
+    st.caption("一套完整的视频多语言翻译与字幕处理流程。")
+    st.info("小提示：点击右上角菜单 > Settings 可切换浅色 / 深色主题。")
+    st.caption("流程：① 翻译 → ② 微调 → ③ 字幕 → ④ 压缩")
 
-    # 全局 API Key 状态检测
-    if config.get_api_key():
-        st.success("🟢 API Key 已配置")
-    else:
-        st.error("🔴 未检测到 API Key")
-        st.caption("请在项目根目录 `.env` 中设置 `OPENAI_API_KEY`，Step 1/2 才能使用。")
+# --- 路由 ---
+step = st.session_state.active_step
+theme.page_header(step)
 
-    st.info("小提示：点击右上角菜单 > Settings 即可切换浅色/深色主题。")
-
-    step = st.radio(
-        "选择功能",
-        [
-            "📝 Step 1: 批量翻译 SRT",
-            "🔄 Step 2: 单集重新翻译",
-            "🎨 Step 3: 批量添加字幕",
-            "🗜️ Step 4: 批量压缩视频"
-        ],
-        help="请选择您需要使用的功能模块"
-    )
-
-st.header("🎬 LanTrans 视频翻译流程")
-st.markdown("---")
-
-
-if "Step 1" in step:
+if step == "step1":
     from step1 import run
     run()
-elif "Step 2" in step:
+elif step == "step2":
     from step2 import run
     run()
-elif "Step 3" in step:
+elif step == "step3":
     from step3 import run
     run()
-elif "Step 4" in step:
+elif step == "step4":
     from step4 import batch_video_compress
     batch_video_compress()

@@ -12,9 +12,6 @@ def run():
         st.error("未检测到 OPENAI_API_KEY，请检查项目根目录下的 .env 文件。")
         return
 
-    st.header("🔄 Step 2: 单集重新翻译")
-    st.caption("手动选择单个已翻译的 SRT 文件进行微调或重新生成，以优化翻译质量。")
-
     with st.container(border=True):
         st.subheader("🎯 选择目标文件")
 

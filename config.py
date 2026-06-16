@@ -6,6 +6,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# MoviePy 在 import 时会直接读取 IMAGEMAGICK_BINARY 环境变量；若它指向不存在的
+# 路径（例如把 Windows 的 ImageMagick 路径带到 macOS/Linux），moviepy 导入即崩溃。
+# 这里清理掉无效值，让 moviepy 自动探测。务必保证本模块先于 moviepy 被导入。
+_im = os.environ.get("IMAGEMAGICK_BINARY")
+if _im and not os.path.exists(_im):
+    os.environ.pop("IMAGEMAGICK_BINARY", None)
+
 # --- 路径 ---
 TEMP_DIR = Path("./temp")
 TEMP_DIR.mkdir(exist_ok=True)

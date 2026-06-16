@@ -3,16 +3,13 @@ import os
 import time
 from pathlib import Path
 
-from moviepy.editor import VideoFileClip
-
-import config
+import config  # 必须先于 moviepy 导入：config 会清理无效的 IMAGEMAGICK_BINARY
 from ui_utils import validate_dir
+
+from moviepy.editor import VideoFileClip
 
 
 def batch_video_compress():
-    st.header("🗜️ Step 4: 批量压缩视频")
-    st.caption("使用 H.264 (libx264) 编码器高效压缩视频，减小文件体积，方便存储和分享。")
-
     with st.container(border=True):
         st.subheader("📁 路径设置")
         col1, col2 = st.columns(2)

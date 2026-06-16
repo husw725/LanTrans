@@ -60,9 +60,6 @@ def run():
         st.error("未检测到 OPENAI_API_KEY，请检查项目根目录下的 .env 文件。")
         return
 
-    st.header("📝 Step 1: 批量多语言翻译 SRT")
-    st.caption("使用 AI 批量翻译 SRT 字幕文件，提供实时进度和成本估算。")
-
     with st.container(border=True):
         st.subheader("📁 路径设置")
         col1, col2 = st.columns(2)

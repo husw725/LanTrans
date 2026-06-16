@@ -5,12 +5,12 @@ import sys
 import time
 from pathlib import Path
 
+import config  # 必须先于 moviepy 导入：config 会清理无效的 IMAGEMAGICK_BINARY
+from ui_utils import validate_dir
+
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from PIL import Image, ImageFont
 import pysrt
-
-import config
-from ui_utils import validate_dir
 
 # --- Configuration & Helpers ---
 
@@ -111,9 +111,6 @@ def _load_style():
 
 # --- Main Application ---
 def run():
-    st.header("🎨 Step 3: 添加视频字幕")
-    st.caption("可视化设计字幕样式，并将其批量应用到视频中。样式会自动保存，跨会话保留。")
-
     if default_font_path is None:
         st.warning("⚠️ 未在系统中找到默认字体，请在「样式参数」中上传一个 .ttf 字体。")
 
