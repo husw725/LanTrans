@@ -1,5 +1,6 @@
-openai
-streamlit
+openai>=1.0
+streamlit>=1.32
 pysrt
-moviepy
-dotenv
+moviepy<2
+python-dotenv
+Pillow

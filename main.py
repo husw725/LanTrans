@@ -1,5 +1,7 @@
 import streamlit as st
 
+import config
+
 # --- Page Configuration ---
 st.set_page_config(
     page_title="LanTrans 视频翻译工具",
@@ -11,7 +13,14 @@ st.set_page_config(
 with st.sidebar:
     st.image("https://img.icons8.com/nolan/64/movie-projector.png", width=60)
     st.title("LanTrans 工具箱")
-    
+
+    # 全局 API Key 状态检测
+    if config.get_api_key():
+        st.success("🟢 API Key 已配置")
+    else:
+        st.error("🔴 未检测到 API Key")
+        st.caption("请在项目根目录 `.env` 中设置 `OPENAI_API_KEY`，Step 1/2 才能使用。")
+
     st.info("小提示：点击右上角菜单 > Settings 即可切换浅色/深色主题。")
 
     step = st.radio(
