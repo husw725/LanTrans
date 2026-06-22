@@ -10,7 +10,7 @@ import config  # 必须先于 moviepy 导入：config 会清理无效的 IMAGEMA
 from ui_utils import validate_dir
 
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
-from PIL import Image, ImageFont
+from PIL import Image, ImageFont, ImageDraw
 import pysrt
 
 # --- Configuration & Helpers ---
@@ -159,6 +159,38 @@ def generate_subtitle_clips(subs, w, h, style):
     return clips
 
 
+def _hex_to_rgb(hex_color):
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def render_preview_pil(frame_img, text, style):
+    """用 PIL 直接在已缓存的视频帧上绘制字幕——不解码视频、不调 ImageMagick，
+    因此可随滑块实时刷新。与最终 ImageMagick 烧录的渲染会有细微差异。"""
+    img = frame_img.convert("RGBA")
+    w, h = img.size
+    font = _get_font(style["font_path"], style["font_size"])
+    wrapped = wrap_text_pil(text, style["font_path"], style["font_size"], style["max_text_width"])
+
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    x, y = w // 2, h - style["bottom_offset"]
+    common = dict(font=font, anchor="ma", align="center", spacing=4)
+
+    # 阴影层
+    sx, sy = style.get("shadow_offset", (0, 2))
+    shadow_rgba = _hex_to_rgb(style["shadow_color"]) + (int(255 * style["shadow_opacity"]),)
+    draw.multiline_text((x + sx, y + sy), wrapped, fill=shadow_rgba, **common)
+
+    # 文字层（含描边）
+    draw.multiline_text(
+        (x, y), wrapped, fill=_hex_to_rgb(style["font_color"]) + (255,),
+        stroke_width=style["stroke_width"], stroke_fill=_hex_to_rgb(style["stroke_color"]) + (255,),
+        **common,
+    )
+    return Image.alpha_composite(img, overlay).convert("RGB")
+
+
 def _save_style(style):
     config.STYLE_FILE.write_text(json.dumps(style, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -224,69 +256,52 @@ def run():
             if 'video_size' in st.session_state and font_path:
                 w, h = st.session_state['video_size']
                 saved = _load_style() or {}
-                # 滑块包进表单：拖动时不重渲染，点「应用」才更新预览，消除卡顿
-                with st.form("style_form"):
-                    with st.container(border=True):
-                        st.markdown("**字体与颜色**")
-                        font_size = st.slider("字体大小", 12, 100, saved.get("font_size", 48))
-                        font_color = st.color_picker("字体颜色", saved.get("font_color", "#FFFFFF"))
-                    with st.container(border=True):
-                        st.markdown("**描边**")
-                        stroke_width = st.slider("描边宽度", 0, 5, saved.get("stroke_width", 1))
-                        stroke_color = st.color_picker("描边颜色", saved.get("stroke_color", "#000000"))
-                    with st.container(border=True):
-                        st.markdown("**位置与尺寸**")
-                        bottom_offset = st.slider("距底部距离(px)", 0, h // 2, saved.get("bottom_offset", 80))
-                        width_ratio = st.slider("最大宽度比例", 0.2, 1.0,
-                                                round(saved.get("max_text_width", int(w * 0.8)) / w, 2), step=0.05)
-                    with st.container(border=True):
-                        st.markdown("**阴影**")
-                        shadow_opacity = st.slider("阴影不透明度", 0.0, 1.0, saved.get("shadow_opacity", 0.5))
-                        shadow_color = st.color_picker("阴影颜色", saved.get("shadow_color", "#000000"))
-                        shadow_offset_y = st.slider("阴影垂直偏移(px)", -10, 10, saved.get("shadow_offset", (0, 2))[1])
-                    submitted = st.form_submit_button("💾 应用并更新预览", type="primary", use_container_width=True)
+                # 实时滑块：每次调整即时重算样式并刷新预览
+                with st.container(border=True):
+                    st.markdown("**字体与颜色**")
+                    font_size = st.slider("字体大小", 12, 100, saved.get("font_size", 48))
+                    font_color = st.color_picker("字体颜色", saved.get("font_color", "#FFFFFF"))
+                with st.container(border=True):
+                    st.markdown("**描边**")
+                    stroke_width = st.slider("描边宽度", 0, 5, saved.get("stroke_width", 1))
+                    stroke_color = st.color_picker("描边颜色", saved.get("stroke_color", "#000000"))
+                with st.container(border=True):
+                    st.markdown("**位置与尺寸**")
+                    bottom_offset = st.slider("距底部距离(px)", 0, h // 2, saved.get("bottom_offset", 80))
+                    width_ratio = st.slider("最大宽度比例", 0.2, 1.0,
+                                            round(saved.get("max_text_width", int(w * 0.8)) / w, 2), step=0.05)
+                with st.container(border=True):
+                    st.markdown("**阴影**")
+                    shadow_opacity = st.slider("阴影不透明度", 0.0, 1.0, saved.get("shadow_opacity", 0.5))
+                    shadow_color = st.color_picker("阴影颜色", saved.get("shadow_color", "#000000"))
+                    shadow_offset_y = st.slider("阴影垂直偏移(px)", -10, 10, saved.get("shadow_offset", (0, 2))[1])
 
-                if submitted:
-                    style = {
-                        "font_path": str(font_path), "font_size": font_size, "font_color": font_color,
-                        "stroke_color": stroke_color, "stroke_width": stroke_width, "bottom_offset": bottom_offset,
-                        "max_text_width": int(w * width_ratio), "shadow_color": shadow_color,
-                        "shadow_opacity": shadow_opacity, "shadow_offset": (0, shadow_offset_y),
-                    }
-                    st.session_state["subtitle_style"] = style
-                    _save_style(style)
-                    st.success("✅ 样式已保存")
+                style = {
+                    "font_path": str(font_path), "font_size": font_size, "font_color": font_color,
+                    "stroke_color": stroke_color, "stroke_width": stroke_width, "bottom_offset": bottom_offset,
+                    "max_text_width": int(w * width_ratio), "shadow_color": shadow_color,
+                    "shadow_opacity": shadow_opacity, "shadow_offset": (0, shadow_offset_y),
+                }
+                st.session_state["subtitle_style"] = style
+                _save_style(style)
             elif not font_path:
                 st.info("请先上传字体后再调整样式。")
             else:
                 st.info("请先上传预览视频以加载样式参数。")
 
-        if 'preview_frame' in st.session_state and 'subtitle_style' in st.session_state and temp_video_path.exists():
+        if 'preview_frame' in st.session_state and 'subtitle_style' in st.session_state:
             with col1:
                 style = st.session_state["subtitle_style"]
-                w, h = st.session_state['video_size']
                 # 按所选预览语言动态显示示例文本
                 preview_text = config.PREVIEW_SAMPLES.get(preview_lang, config.PREVIEW_SAMPLES["English"])
                 if preview_lang in config.NON_LATIN_LANGS and not uploaded_font:
                     st.info(f"「{preview_lang_display}」为非拉丁文字，默认 Arial 无法显示，"
                             "请在右侧上传对应字体后再预览。")
                 try:
-                    wrapped = wrap_text_pil(preview_text, style["font_path"], style["font_size"], style["max_text_width"])
-                    txt_clip = TextClip(
-                        wrapped, fontsize=style['font_size'], color=style['font_color'],
-                        stroke_color=style['stroke_color'], stroke_width=style['stroke_width'],
-                        method='label', align='center', font=style['font_path']
-                    ).set_position(('center', h - style['bottom_offset']))
-                    shadow_clip = TextClip(
-                        wrapped, fontsize=style.get("shadow_font_size", style["font_size"]), color=style['shadow_color'],
-                        method='label', align='center', font=style['font_path']
-                    ).set_opacity(style['shadow_opacity']).set_position(('center', h - style['bottom_offset'] + style['shadow_offset'][1]))
-                    with VideoFileClip(str(temp_video_path)) as base_clip:
-                        final_clip = CompositeVideoClip([base_clip.subclip(0, 1), shadow_clip, txt_clip])
-                        final_frame = final_clip.get_frame(0.5)
-                    st.image(Image.fromarray(final_frame), caption="字幕样式预览")
+                    preview_img = render_preview_pil(st.session_state['preview_frame'], preview_text, style)
+                    st.image(preview_img, caption="字幕样式预览（实时；最终成片以烧录结果为准）")
                 except Exception as e:
-                    st.warning(f"⚠️ 预览渲染失败（通常是字体或 ImageMagick 问题）：{e}\n"
+                    st.warning(f"⚠️ 预览渲染失败（通常是字体问题）：{e}\n"
                                f"请尝试上传一个标准 .ttf 字体；非拉丁语言需上传对应字体。")
 
     # --- Tab 2: Batch Processing ---
