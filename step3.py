@@ -21,12 +21,15 @@ if is_windows:
     if imagemagick_binary and os.path.exists(imagemagick_binary):
         mpy_config.change_settings({"IMAGEMAGICK_BINARY": imagemagick_binary})
 
-# 跨平台默认字体（优先含中日韩字形的字体，找不到则置空、提示用户上传）
+# 跨平台默认字体：优先 Arial 等拉丁字体（多数目标语言为拉丁文，且 .ttf 渲染最稳），
+# CJK 字体仅作兜底。中日韩/泰/阿拉伯等非拉丁字幕请在右侧上传对应字体。
+# 注意：避免把 .ttc（字体集合）作为默认——ImageMagick 渲染 .ttc 常常失败，会导致预览报错。
 _FONT_CANDIDATES = {
-    "win32": [r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\arial.ttf"],
-    "darwin": ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/Supplemental/Arial.ttf"],
-}.get(sys.platform, ["/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"])
+    "win32": [r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\msyh.ttc"],
+    "darwin": ["/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf",
+               "/System/Library/Fonts/Helvetica.ttc", "/System/Library/Fonts/PingFang.ttc"],
+}.get(sys.platform, ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"])
 default_font_path = next((p for p in _FONT_CANDIDATES if os.path.exists(p)), None)
 
 
@@ -136,11 +139,14 @@ def run():
 
         with col2:
             st.subheader("⚙️ 样式参数")
-            uploaded_font = st.file_uploader("上传自定义字体 (.ttf，中文字幕建议上传中文字体)", type=["ttf", "ttc", "otf"])
+            uploaded_font = st.file_uploader("上传自定义字体 (.ttf，非拉丁语言请上传对应字体)", type=["ttf", "ttc", "otf"])
             font_path = default_font_path
             if uploaded_font:
                 font_path = "uploaded_font.ttf"
                 Path(font_path).write_bytes(uploaded_font.read())
+            else:
+                st.caption(f"默认字体：`{Path(default_font_path).name if default_font_path else '未找到'}`"
+                           "（拉丁语言适用；中日韩 / 泰 / 阿拉伯等请上传对应字体）")
 
             if 'video_size' in st.session_state and font_path:
                 w, h = st.session_state['video_size']
@@ -180,21 +186,29 @@ def run():
             with col1:
                 style = st.session_state["subtitle_style"]
                 w, h = st.session_state['video_size']
-                preview_text = "这是字幕预览，这段文字会展示换行效果。"
-                wrapped = wrap_text_pil(preview_text, style["font_path"], style["font_size"], style["max_text_width"])
-                txt_clip = TextClip(
-                    wrapped, fontsize=style['font_size'], color=style['font_color'],
-                    stroke_color=style['stroke_color'], stroke_width=style['stroke_width'],
-                    method='label', align='center', font=style['font_path']
-                ).set_position(('center', h - style['bottom_offset']))
-                shadow_clip = TextClip(
-                    wrapped, fontsize=style.get("shadow_font_size", style["font_size"]), color=style['shadow_color'],
-                    method='label', align='center', font=style['font_path']
-                ).set_opacity(style['shadow_opacity']).set_position(('center', h - style['bottom_offset'] + style['shadow_offset'][1]))
-                with VideoFileClip(str(temp_video_path)) as base_clip:
-                    final_clip = CompositeVideoClip([base_clip.subclip(0, 1), shadow_clip, txt_clip])
-                    final_frame = final_clip.get_frame(0.5)
-                st.image(Image.fromarray(final_frame), caption="字幕样式预览")
+                # 默认用拉丁示例文本（与默认 Arial 字体匹配）；上传了自定义字体时
+                # 追加一行中文，方便确认该字体能否渲染中日韩字形。
+                preview_text = "Subtitle preview — this line is long enough to show wrapping."
+                if uploaded_font:
+                    preview_text += "\n字幕预览：换行效果展示。"
+                try:
+                    wrapped = wrap_text_pil(preview_text, style["font_path"], style["font_size"], style["max_text_width"])
+                    txt_clip = TextClip(
+                        wrapped, fontsize=style['font_size'], color=style['font_color'],
+                        stroke_color=style['stroke_color'], stroke_width=style['stroke_width'],
+                        method='label', align='center', font=style['font_path']
+                    ).set_position(('center', h - style['bottom_offset']))
+                    shadow_clip = TextClip(
+                        wrapped, fontsize=style.get("shadow_font_size", style["font_size"]), color=style['shadow_color'],
+                        method='label', align='center', font=style['font_path']
+                    ).set_opacity(style['shadow_opacity']).set_position(('center', h - style['bottom_offset'] + style['shadow_offset'][1]))
+                    with VideoFileClip(str(temp_video_path)) as base_clip:
+                        final_clip = CompositeVideoClip([base_clip.subclip(0, 1), shadow_clip, txt_clip])
+                        final_frame = final_clip.get_frame(0.5)
+                    st.image(Image.fromarray(final_frame), caption="字幕样式预览")
+                except Exception as e:
+                    st.warning(f"⚠️ 预览渲染失败（通常是字体或 ImageMagick 问题）：{e}\n"
+                               f"请尝试上传一个标准 .ttf 字体；非拉丁语言需上传对应字体。")
 
     # --- Tab 2: Batch Processing ---
     with tab2:
