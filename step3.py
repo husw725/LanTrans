@@ -125,6 +125,13 @@ def run():
 
         with col1:
             st.subheader("🖼️ 实时预览")
+            _lang_displays = list(config.LANG_OPTIONS.keys())
+            _default_display = next((d for d, v in config.LANG_OPTIONS.items() if v == "English"), _lang_displays[0])
+            preview_lang_display = st.selectbox(
+                "预览语言", _lang_displays, index=_lang_displays.index(_default_display),
+                help="预览文本会按所选语言显示，便于确认字体能否正确渲染该语言。",
+            )
+            preview_lang = config.LANG_OPTIONS[preview_lang_display]
             temp_video_path = Path("temp_preview_video.mp4")
             preview_video = st.file_uploader("选择一个视频用于字幕样式预览", type=["mp4", "mov", "mkv"])
             if preview_video:
@@ -186,11 +193,11 @@ def run():
             with col1:
                 style = st.session_state["subtitle_style"]
                 w, h = st.session_state['video_size']
-                # 默认用拉丁示例文本（与默认 Arial 字体匹配）；上传了自定义字体时
-                # 追加一行中文，方便确认该字体能否渲染中日韩字形。
-                preview_text = "Subtitle preview — this line is long enough to show wrapping."
-                if uploaded_font:
-                    preview_text += "\n字幕预览：换行效果展示。"
+                # 按所选预览语言动态显示示例文本
+                preview_text = config.PREVIEW_SAMPLES.get(preview_lang, config.PREVIEW_SAMPLES["English"])
+                if preview_lang in config.NON_LATIN_LANGS and not uploaded_font:
+                    st.info(f"「{preview_lang_display}」为非拉丁文字，默认 Arial 无法显示，"
+                            "请在右侧上传对应字体后再预览。")
                 try:
                     wrapped = wrap_text_pil(preview_text, style["font_path"], style["font_size"], style["max_text_width"])
                     txt_clip = TextClip(

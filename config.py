@@ -52,6 +52,30 @@ LANG_OPTIONS = {
     "中文（简体） (Simplified Chinese)": "Simplified Chinese",
 }
 
+# 字幕样式预览的示例文本（按语言），用于 Step 3 实时预览。
+# 每句都足够长以演示换行效果。键为 LANG_OPTIONS 的值。
+PREVIEW_SAMPLES = {
+    "English": "Subtitle preview — this line is long enough to show wrapping.",
+    "Spanish": "Vista previa de subtítulos: esta línea es lo bastante larga para ver el ajuste.",
+    "Portuguese": "Pré-visualização de legendas: esta linha é longa o suficiente para mostrar a quebra.",
+    "German": "Untertitel-Vorschau – diese Zeile ist lang genug, um den Umbruch zu zeigen.",
+    "French": "Aperçu des sous-titres : cette ligne est assez longue pour afficher le retour.",
+    "Italian": "Anteprima dei sottotitoli: questa riga è abbastanza lunga da mostrare l'a capo.",
+    "Indonesian": "Pratinjau subtitle — baris ini cukup panjang untuk menampilkan pembungkusan.",
+    "Malay": "Pratonton sari kata — baris ini cukup panjang untuk menunjukkan pembalutan teks.",
+    "Arabic": "معاينة الترجمة — هذا السطر طويل بما يكفي لإظهار التفاف النص.",
+    "Hindi": "उपशीर्षक पूर्वावलोकन — यह पंक्ति रैपिंग दिखाने के लिए पर्याप्त लंबी है।",
+    "Thai": "ตัวอย่างคำบรรยาย — บรรทัดนี้ยาวพอที่จะแสดงการตัดบรรทัด",
+    "Japanese": "字幕プレビュー：この行は折り返しを確認できる長さです。",
+    "Korean": "자막 미리보기 — 이 줄은 줄바꿈을 보여줄 만큼 충분히 깁니다.",
+    "Traditional Chinese": "字幕預覽：這段文字會展示換行效果。",
+    "Simplified Chinese": "字幕预览：这段文字会展示换行效果。",
+}
+
+# 非拉丁文字语言：默认 Arial 字体无法渲染，需上传对应字体。
+NON_LATIN_LANGS = {"Arabic", "Hindi", "Thai", "Japanese", "Korean",
+                   "Traditional Chinese", "Simplified Chinese"}
+
 # --- 视频压缩 ---
 CRF_OPTIONS = [16, 18, 20, 22, 24, 26, 28, 30]
 DEFAULT_CRF = 22
