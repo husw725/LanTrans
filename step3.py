@@ -44,28 +44,69 @@ def safe_text(text):
     return cleaned.strip()
 
 
+def _is_breakable_char(ch):
+    """无空格断行语言（中日韩、泰文及全角标点）——可在字符之间换行。"""
+    o = ord(ch)
+    return (0x4E00 <= o <= 0x9FFF or   # CJK 统一表意文字
+            0x3040 <= o <= 0x30FF or   # 日文平假名 / 片假名
+            0xAC00 <= o <= 0xD7A3 or   # 韩文谚文
+            0x0E00 <= o <= 0x0E7F or   # 泰文
+            0x3000 <= o <= 0x303F or   # CJK 标点
+            0xFF00 <= o <= 0xFFEF)     # 全角字符
+
+
+def _is_combining_mark(ch):
+    """组合附加符号 / 泰文元音声调符号——不应出现在行首，需附着到前一字符。"""
+    o = ord(ch)
+    return (0x0300 <= o <= 0x036F or
+            o == 0x0E31 or 0x0E34 <= o <= 0x0E3A or 0x0E47 <= o <= 0x0E4E)
+
+
 def wrap_text_pil(text, font_path, font_size, max_width):
-    """Wraps text using PIL for accurate width calculation."""
+    """按像素宽度换行。拉丁文按单词换行；中日韩/泰文等无空格语言按字符换行。"""
     font = ImageFont.truetype(font_path, font_size)
+
+    def width(s):
+        try:
+            return font.getlength(s)
+        except AttributeError:
+            bbox = font.getbbox(s)
+            return bbox[2] - bbox[0]
+
     lines = []
     for paragraph in text.split('\n'):
-        current_line = ""
-        for word in paragraph.split(' '):
-            if not word:
-                continue
-            test_line = f"{current_line} {word}".strip()
-            try:
-                line_width = font.getlength(test_line)
-            except AttributeError:
-                bbox = font.getbbox(test_line)
-                line_width = bbox[2] - bbox[0]
-            if line_width <= max_width:
-                current_line = test_line
+        # 切成原子：空格、拉丁单词、单个 CJK/泰文字符
+        atoms, buf = [], ""
+        for ch in paragraph:
+            if _is_combining_mark(ch):
+                if buf:
+                    buf += ch
+                elif atoms:
+                    atoms[-1] += ch
+                else:
+                    buf += ch
+            elif ch == ' ' or _is_breakable_char(ch):
+                if buf:
+                    atoms.append(buf)
+                    buf = ""
+                atoms.append(ch)
             else:
-                lines.append(word if not current_line else current_line)
-                current_line = word if current_line else ""
-        if current_line:
-            lines.append(current_line)
+                buf += ch
+        if buf:
+            atoms.append(buf)
+
+        current = ""
+        for atom in atoms:
+            if atom == ' ' and not current:
+                continue  # 跳过行首空格
+            tentative = current + atom
+            if not current or width(tentative) <= max_width:
+                current = tentative
+            else:
+                lines.append(current.rstrip())
+                current = "" if atom == ' ' else atom
+        if current.strip():
+            lines.append(current.rstrip())
     return "\n".join(lines)
 
 
