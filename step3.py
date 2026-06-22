@@ -9,18 +9,14 @@ from pathlib import Path
 import config  # 必须先于 moviepy 导入：config 会清理无效的 IMAGEMAGICK_BINARY
 from ui_utils import validate_dir
 
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
+import numpy as np
+from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
 from PIL import Image, ImageFont, ImageDraw
 import pysrt
 
 # --- Configuration & Helpers ---
-
-is_windows = os.name == "nt"
-if is_windows:
-    import moviepy.config as mpy_config
-    imagemagick_binary = os.getenv("IMAGEMAGICK_BINARY")
-    if imagemagick_binary and os.path.exists(imagemagick_binary):
-        mpy_config.change_settings({"IMAGEMAGICK_BINARY": imagemagick_binary})
+# 字幕渲染统一用 PIL（见 render_subtitle_layer），不再依赖 ImageMagick/TextClip：
+# 预览与烧录像素级一致，也免去了 Windows 配置 IMAGEMAGICK_BINARY 的麻烦。
 
 # 跨平台默认字体：优先 Arial 等拉丁字体（多数目标语言为拉丁文，且 .ttf 渲染最稳），
 # CJK 字体仅作兜底。中日韩/泰/阿拉伯等非拉丁字幕请在右侧上传对应字体。
@@ -136,26 +132,16 @@ def wrap_text_pil(text, font_path, font_size, max_width):
 
 
 def generate_subtitle_clips(subs, w, h, style):
+    """为每条字幕生成一个整帧透明图层 ImageClip（与预览同一套 PIL 渲染）。"""
     clips = []
-    shadow_offset = style.get("shadow_offset", (2, 2))
-    shadow_font_size = style.get("shadow_font_size", style["font_size"])
     for sub in subs:
         safe_txt = safe_text(sub.text)
         if not safe_txt:
             continue
-        wrapped_text = wrap_text_pil(safe_txt, style["font_path"], style["font_size"], style["max_text_width"])
-        shadow_clip = TextClip(
-            wrapped_text, fontsize=shadow_font_size, color=style["shadow_color"],
-            method="label", align="center", font=style["font_path"]
-        ).set_opacity(style["shadow_opacity"]).set_position(('center', h - style["bottom_offset"] + shadow_offset[1]))
-        txt_clip = TextClip(
-            wrapped_text, fontsize=style["font_size"], color=style["font_color"],
-            stroke_color=style["stroke_color"], stroke_width=style["stroke_width"],
-            method="label", align="center", font=style["font_path"]
-        ).set_position(('center', h - style["bottom_offset"]))
+        layer = render_subtitle_layer((w, h), safe_txt, style)
         start, end = srt_time_to_seconds(sub.start), srt_time_to_seconds(sub.end)
-        clips.append(shadow_clip.set_start(start).set_end(end))
-        clips.append(txt_clip.set_start(start).set_end(end))
+        clip = ImageClip(np.array(layer), transparent=True).set_start(start).set_end(end)
+        clips.append(clip)
     return clips
 
 
@@ -164,31 +150,63 @@ def _hex_to_rgb(hex_color):
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def render_preview_pil(frame_img, text, style):
-    """用 PIL 直接在已缓存的视频帧上绘制字幕——不解码视频、不调 ImageMagick，
-    因此可随滑块实时刷新。与最终 ImageMagick 烧录的渲染会有细微差异。"""
-    img = frame_img.convert("RGBA")
-    w, h = img.size
-    font = _get_font(style["font_path"], style["font_size"])
-    wrapped = wrap_text_pil(text, style["font_path"], style["font_size"], style["max_text_width"])
+def _wrap_and_fit(text, style):
+    """换行，并在设置了 max_lines 时自动缩小字号以满足行数上限。
+    返回 (换行后文本, 实际字号)。"""
+    fs = style["font_size"]
+    max_lines = style.get("max_lines", 0)
+    while True:
+        wrapped = wrap_text_pil(text, style["font_path"], fs, style["max_text_width"])
+        if not max_lines or wrapped.count("\n") + 1 <= max_lines or fs <= 12:
+            return wrapped, fs
+        fs -= 2
 
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+
+def render_subtitle_layer(size, text, style):
+    """把单条字幕渲染成整帧大小的透明 RGBA 图层（背景条 + 阴影 + 描边 + 伪加粗 + 文字）。
+    预览与烧录共用此函数，确保所见即所得。"""
+    w, h = size
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
+
+    wrapped, fs = _wrap_and_fit(text, style)
+    font = _get_font(style["font_path"], fs)
+    bold = style.get("bold", 0)
+    outline = style.get("stroke_width", 0)
+    spacing = style.get("line_spacing", max(2, int(fs * 0.2)))
     x, y = w // 2, h - style["bottom_offset"]
-    common = dict(font=font, anchor="ma", align="center", spacing=4)
+    common = dict(font=font, anchor="ma", align="center", spacing=spacing)
+
+    # 背景色块（半透明）
+    if style.get("bg_enabled"):
+        bbox = draw.multiline_textbbox((x, y), wrapped, stroke_width=outline + bold, **common)
+        pad = style.get("bg_padding", 12)
+        rect = (bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad)
+        bg = _hex_to_rgb(style.get("bg_color", "#000000")) + (int(255 * style.get("bg_opacity", 0.5)),)
+        draw.rounded_rectangle(rect, radius=style.get("bg_radius", 10), fill=bg)
 
     # 阴影层
-    sx, sy = style.get("shadow_offset", (0, 2))
-    shadow_rgba = _hex_to_rgb(style["shadow_color"]) + (int(255 * style["shadow_opacity"]),)
-    draw.multiline_text((x + sx, y + sy), wrapped, fill=shadow_rgba, **common)
+    if style.get("shadow_opacity", 0) > 0:
+        sx, sy = style.get("shadow_offset", (0, 2))
+        shadow_rgba = _hex_to_rgb(style["shadow_color"]) + (int(255 * style["shadow_opacity"]),)
+        draw.multiline_text((x + sx, y + sy), wrapped, fill=shadow_rgba, stroke_width=bold, **common)
 
-    # 文字层（含描边）
-    draw.multiline_text(
-        (x, y), wrapped, fill=_hex_to_rgb(style["font_color"]) + (255,),
-        stroke_width=style["stroke_width"], stroke_fill=_hex_to_rgb(style["stroke_color"]) + (255,),
-        **common,
-    )
-    return Image.alpha_composite(img, overlay).convert("RGB")
+    # 描边层（颜色边，厚度含伪加粗）
+    if outline > 0:
+        edge = _hex_to_rgb(style["stroke_color"]) + (255,)
+        draw.multiline_text((x, y), wrapped, fill=edge, stroke_width=outline + bold, stroke_fill=edge, **common)
+
+    # 文字本体（伪加粗 = 同色描边把字身撑粗）
+    fill = _hex_to_rgb(style["font_color"]) + (255,)
+    draw.multiline_text((x, y), wrapped, fill=fill, stroke_width=bold, stroke_fill=fill, **common)
+    return overlay
+
+
+def render_preview_pil(frame_img, text, style):
+    """实时预览：把字幕层合成到缓存帧上。"""
+    base = frame_img.convert("RGBA")
+    layer = render_subtitle_layer(base.size, text, style)
+    return Image.alpha_composite(base, layer).convert("RGB")
 
 
 def _save_style(style):
@@ -208,6 +226,36 @@ def _load_style():
         except (json.JSONDecodeError, OSError):
             pass
     return None
+
+
+def _apply_partial(partial):
+    """把一组样式字段并入当前样式并保存，然后重跑（供预设/颜色快捷按钮使用）。"""
+    base = _load_style() or {}
+    base.update(partial)
+    st.session_state["subtitle_style"] = base
+    _save_style(base)
+    st.rerun()
+
+
+def _list_fonts():
+    """扫描 fonts/ 目录返回 {显示名: 路径}。"""
+    fonts = {}
+    if config.FONTS_DIR.exists():
+        for p in sorted(config.FONTS_DIR.iterdir()):
+            if p.suffix.lower() in (".ttf", ".ttc", ".otf"):
+                fonts[p.name] = str(p)
+    return fonts
+
+
+def _draw_safe_area(img):
+    """在预览图上叠加标题安全区（5% 边距）与水平中线参考线。"""
+    img = img.copy()
+    d = ImageDraw.Draw(img)
+    w, h = img.size
+    mx, my = int(w * 0.05), int(h * 0.05)
+    d.rectangle([mx, my, w - mx, h - my], outline=(255, 255, 0), width=2)
+    d.line([(w // 2, 0), (w // 2, h)], fill=(255, 0, 0), width=1)
+    return img
 
 
 # --- Main Application ---
@@ -231,6 +279,8 @@ def run():
             )
             preview_lang = config.LANG_OPTIONS[preview_lang_display]
             preview_video = st.file_uploader("选择一个视频用于字幕样式预览", type=["mp4", "mov", "mkv"])
+            show_guides = st.checkbox("显示安全区参考线", value=False,
+                                      help="黄框为标题安全区(5% 边距)，红线为水平中线，便于对齐。")
             if preview_video is not None:
                 # 预览只需一帧：仅在「新上传」时解码一次，取帧后立即删除临时视频，
                 # 后续每次拖动滑块都复用缓存帧，不再重复读写/解码整段视频。
@@ -253,43 +303,73 @@ def run():
 
         with col2:
             st.subheader("⚙️ 样式参数")
-            uploaded_font = st.file_uploader("上传自定义字体 (.ttf，非拉丁语言请上传对应字体)", type=["ttf", "ttc", "otf"])
-            font_path = default_font_path
+
+            # 一键样式预设
+            pc1, pc2 = st.columns([0.7, 0.3])
+            chosen_preset = pc1.selectbox("样式预设", ["自定义"] + list(config.STYLE_PRESETS.keys()),
+                                          label_visibility="collapsed")
+            if pc2.button("应用", use_container_width=True) and chosen_preset != "自定义":
+                _apply_partial(config.STYLE_PRESETS[chosen_preset])
+
+            # 字体来源：上传 > fonts/ 目录 > 系统默认
+            uploaded_font = st.file_uploader("上传自定义字体 (.ttf/.ttc/.otf)", type=["ttf", "ttc", "otf"])
+            bundled = _list_fonts()
+            font_choice = st.selectbox("字体", ["系统默认"] + list(bundled.keys()),
+                                       help="把字体放进项目 fonts/ 目录即可在此选择；上传字体优先级最高。")
             if uploaded_font:
                 font_path = str(config.TEMP_DIR / "uploaded_font.ttf")
                 Path(font_path).write_bytes(uploaded_font.read())
+                st.caption("当前使用：上传的字体")
+            elif font_choice != "系统默认":
+                font_path = bundled[font_choice]
             else:
-                st.caption(f"默认字体：`{Path(default_font_path).name if default_font_path else '未找到'}`"
-                           "（拉丁语言适用；中日韩 / 泰 / 阿拉伯等请上传对应字体）")
+                font_path = default_font_path
+                st.caption(f"系统默认：`{Path(default_font_path).name if default_font_path else '未找到'}`"
+                           "（拉丁语言适用；中日韩 / 泰 / 阿拉伯等请放字体到 fonts/ 或上传）")
 
             if 'video_size' in st.session_state and font_path:
                 w, h = st.session_state['video_size']
                 saved = _load_style() or {}
-                # 实时滑块：每次调整即时重算样式并刷新预览
+
                 with st.container(border=True):
-                    st.markdown("**字体与颜色**")
-                    font_size = st.slider("字体大小", 12, 100, saved.get("font_size", 48))
+                    st.markdown("**字体 / 字重 / 颜色**")
+                    font_size = st.slider("字体大小", 12, 120, saved.get("font_size", 48))
+                    bold = st.slider("加粗（字重）", 0, 6, saved.get("bold", 1),
+                                     help="伪加粗：用同色描边把字身撑粗，任何字体都适用。")
                     font_color = st.color_picker("字体颜色", saved.get("font_color", "#FFFFFF"))
+                    swatch = st.columns(len(config.COLOR_PRESETS))
+                    for col, (name, (fc, sc)) in zip(swatch, config.COLOR_PRESETS.items()):
+                        if col.button(name, use_container_width=True):
+                            _apply_partial({"font_color": fc, "stroke_color": sc})
                 with st.container(border=True):
                     st.markdown("**描边**")
-                    stroke_width = st.slider("描边宽度", 0, 5, saved.get("stroke_width", 1))
+                    stroke_width = st.slider("描边宽度", 0, 6, saved.get("stroke_width", 1))
                     stroke_color = st.color_picker("描边颜色", saved.get("stroke_color", "#000000"))
                 with st.container(border=True):
-                    st.markdown("**位置与尺寸**")
+                    st.markdown("**背景色块**")
+                    bg_enabled = st.checkbox("启用半透明底条", saved.get("bg_enabled", False))
+                    bg_color = st.color_picker("背景颜色", saved.get("bg_color", "#000000"))
+                    bg_opacity = st.slider("背景不透明度", 0.0, 1.0, saved.get("bg_opacity", 0.5))
+                    bg_padding = st.slider("背景内边距(px)", 0, 40, saved.get("bg_padding", 12))
+                with st.container(border=True):
+                    st.markdown("**位置与排版**")
                     bottom_offset = st.slider("距底部距离(px)", 0, h // 2, saved.get("bottom_offset", 80))
                     width_ratio = st.slider("最大宽度比例", 0.2, 1.0,
                                             round(saved.get("max_text_width", int(w * 0.8)) / w, 2), step=0.05)
-                with st.container(border=True):
-                    st.markdown("**阴影**")
+                    line_spacing = st.slider("行距(px)", 0, 40, saved.get("line_spacing", max(2, int(font_size * 0.2))))
+                    max_lines = st.slider("最多行数（0=不限，超出自动缩字）", 0, 4, saved.get("max_lines", 0))
+                with st.expander("阴影"):
                     shadow_opacity = st.slider("阴影不透明度", 0.0, 1.0, saved.get("shadow_opacity", 0.5))
                     shadow_color = st.color_picker("阴影颜色", saved.get("shadow_color", "#000000"))
                     shadow_offset_y = st.slider("阴影垂直偏移(px)", -10, 10, saved.get("shadow_offset", (0, 2))[1])
 
                 style = {
-                    "font_path": str(font_path), "font_size": font_size, "font_color": font_color,
+                    "font_path": str(font_path), "font_size": font_size, "bold": bold, "font_color": font_color,
                     "stroke_color": stroke_color, "stroke_width": stroke_width, "bottom_offset": bottom_offset,
                     "max_text_width": int(w * width_ratio), "shadow_color": shadow_color,
                     "shadow_opacity": shadow_opacity, "shadow_offset": (0, shadow_offset_y),
+                    "bg_enabled": bg_enabled, "bg_color": bg_color, "bg_opacity": bg_opacity, "bg_padding": bg_padding,
+                    "line_spacing": line_spacing, "max_lines": max_lines,
                 }
                 st.session_state["subtitle_style"] = style
                 _save_style(style)
@@ -308,7 +388,9 @@ def run():
                             "请在右侧上传对应字体后再预览。")
                 try:
                     preview_img = render_preview_pil(st.session_state['preview_frame'], preview_text, style)
-                    st.image(preview_img, caption="字幕样式预览（实时；最终成片以烧录结果为准）")
+                    if show_guides:
+                        preview_img = _draw_safe_area(preview_img)
+                    st.image(preview_img, caption="字幕样式预览（实时；与最终烧录一致）")
                 except Exception as e:
                     st.warning(f"⚠️ 预览渲染失败（通常是字体问题）：{e}\n"
                                f"请尝试上传一个标准 .ttf 字体；非拉丁语言需上传对应字体。")
