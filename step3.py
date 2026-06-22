@@ -230,17 +230,26 @@ def run():
                 help="预览文本会按所选语言显示，便于确认字体能否正确渲染该语言。",
             )
             preview_lang = config.LANG_OPTIONS[preview_lang_display]
-            temp_video_path = config.TEMP_DIR / "preview_video.mp4"
             preview_video = st.file_uploader("选择一个视频用于字幕样式预览", type=["mp4", "mov", "mkv"])
-            if preview_video:
-                temp_video_path.write_bytes(preview_video.read())
-                try:
-                    with VideoFileClip(str(temp_video_path)) as clip:
-                        st.session_state['preview_frame'] = Image.fromarray(clip.get_frame(1.0))
-                        st.session_state['video_size'] = clip.size
-                except Exception as e:
-                    st.error(f"视频加载失败: {e}")
-                    st.session_state.pop('preview_frame', None)
+            if preview_video is not None:
+                # 预览只需一帧：仅在「新上传」时解码一次，取帧后立即删除临时视频，
+                # 后续每次拖动滑块都复用缓存帧，不再重复读写/解码整段视频。
+                file_key = getattr(preview_video, "file_id", None) or (preview_video.name, preview_video.size)
+                if st.session_state.get("preview_file_key") != file_key:
+                    tmp = config.TEMP_DIR / "preview_frame_src"
+                    try:
+                        tmp.write_bytes(preview_video.getvalue())
+                        with VideoFileClip(str(tmp)) as clip:
+                            t = min(1.0, (clip.duration or 0) / 2)
+                            st.session_state['preview_frame'] = Image.fromarray(clip.get_frame(t))
+                            st.session_state['video_size'] = clip.size
+                        st.session_state['preview_file_key'] = file_key
+                    except Exception as e:
+                        st.error(f"视频加载失败: {e}")
+                        st.session_state.pop('preview_frame', None)
+                        st.session_state.pop('preview_file_key', None)
+                    finally:
+                        tmp.unlink(missing_ok=True)
 
         with col2:
             st.subheader("⚙️ 样式参数")
