@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import config
-from translator import get_client, load_memory, save_memory, translate_srt, update_memory
+from translator import get_client, load_memory, save_memory, translate_srt, update_memory, trim_memory
 
 
 def run():
@@ -57,6 +57,7 @@ def run():
                 new_memory, mem_cost, err = update_memory(client, translated, memory, config.DEFAULT_MEMORY_MODEL)
                 if new_memory is not None:
                     memory.update(new_memory)
+                    trim_memory(memory)
                     save_memory(memory, mem_path)
                 elif err:
                     st.warning(f"⚠️ {err}，本次未更新记忆。")

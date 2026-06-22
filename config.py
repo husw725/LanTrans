@@ -76,9 +76,19 @@ PREVIEW_SAMPLES = {
 NON_LATIN_LANGS = {"Arabic", "Hindi", "Thai", "Japanese", "Korean",
                    "Traditional Chinese", "Simplified Chinese"}
 
-# --- 视频压缩 ---
+# --- 翻译稳健性 ---
+RETRY_ATTEMPTS = 4            # OpenAI 调用失败时的重试次数
+RETRY_BASE_DELAY = 2.0        # 指数退避基数（秒）：2, 4, 8...
+CHUNK_CUES = 40              # 单次请求的最大字幕条数，超过则分块翻译，防止输出被截断
+MAX_MEMORY_ITEMS = 150       # 翻译记忆中 characters / terminology 各自保留的最大条目数
+MAX_STYLE_NOTES = 800        # style_notes 的最大字符数
+TRANSLATE_TEMPERATURE = None  # 0~1 可降低随机性；None=用模型默认。注意 GPT-5 系列可能不支持自定义温度
+
+# --- 视频编码 ---
 CRF_OPTIONS = [16, 18, 20, 22, 24, 26, 28, 30]
 DEFAULT_CRF = 22
+ENCODE_PRESETS = ["veryfast", "fast", "medium", "slow"]  # 越靠右越慢、压缩率越高
+DEFAULT_PRESET = "medium"
 
 
 def get_api_key() -> str | None:

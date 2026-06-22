@@ -26,6 +26,9 @@ def batch_video_compress():
             help="**CRF (Constant Rate Factor)** 值越低质量越高、文件越大。推荐范围 18-28。"
         )
         st.info(f"当前选择 **CRF {selected_crf}**: {'高质量' if selected_crf < 20 else '均衡' if selected_crf < 25 else '小体积'}")
+        preset = st.selectbox("编码速度 (preset)", config.ENCODE_PRESETS,
+                              index=config.ENCODE_PRESETS.index(config.DEFAULT_PRESET),
+                              help="越靠后越慢、压缩率越高。medium 通常是速度与体积的良好平衡。")
         overwrite = st.checkbox("覆盖已存在的输出文件", value=False)
 
     st.divider()
@@ -57,7 +60,7 @@ def batch_video_compress():
                 t0 = time.time()
                 with VideoFileClip(in_path) as clip:
                     clip.write_videofile(
-                        out_path, codec="libx264", audio_codec="aac", preset="slow",
+                        out_path, codec="libx264", audio_codec="aac", preset=preset,
                         ffmpeg_params=["-crf", str(selected_crf), "-pix_fmt", "yuv420p"],
                         threads=4, logger=None
                     )

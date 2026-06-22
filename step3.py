@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 
 import config  # 必须先于 moviepy 导入：config 会清理无效的 IMAGEMAGICK_BINARY
@@ -62,9 +63,31 @@ def _is_combining_mark(ch):
             o == 0x0E31 or 0x0E34 <= o <= 0x0E3A or 0x0E47 <= o <= 0x0E4E)
 
 
+# 避头尾：这些标点不应出现在行首，需并入上一行行尾
+_LEADING_FORBIDDEN = "，。、！？；：）】》」』’”·.,!?;:)]}>"
+
+
+def _apply_kinsoku(lines):
+    """把出现在行首的收尾标点移到上一行末尾（中日韩避头尾规则的简化版）。"""
+    out = []
+    for line in lines:
+        while out and line and line[0] in _LEADING_FORBIDDEN:
+            out[-1] += line[0]
+            line = line[1:]
+        if line:
+            out.append(line)
+    return out
+
+
+@lru_cache(maxsize=16)
+def _get_font(font_path, font_size):
+    """缓存字体对象，避免一集数百条字幕时反复从磁盘加载。"""
+    return ImageFont.truetype(font_path, font_size)
+
+
 def wrap_text_pil(text, font_path, font_size, max_width):
     """按像素宽度换行。拉丁文按单词换行；中日韩/泰文等无空格语言按字符换行。"""
-    font = ImageFont.truetype(font_path, font_size)
+    font = _get_font(font_path, font_size)
 
     def width(s):
         try:
@@ -95,7 +118,7 @@ def wrap_text_pil(text, font_path, font_size, max_width):
         if buf:
             atoms.append(buf)
 
-        current = ""
+        para_lines, current = [], ""
         for atom in atoms:
             if atom == ' ' and not current:
                 continue  # 跳过行首空格
@@ -103,10 +126,12 @@ def wrap_text_pil(text, font_path, font_size, max_width):
             if not current or width(tentative) <= max_width:
                 current = tentative
             else:
-                lines.append(current.rstrip())
+                para_lines.append(current.rstrip())
                 current = "" if atom == ' ' else atom
         if current.strip():
-            lines.append(current.rstrip())
+            para_lines.append(current.rstrip())
+        # 避头尾仅在同一段（同一原始行）内处理，避免跨行合并
+        lines.extend(_apply_kinsoku(para_lines))
     return "\n".join(lines)
 
 
@@ -173,7 +198,7 @@ def run():
                 help="预览文本会按所选语言显示，便于确认字体能否正确渲染该语言。",
             )
             preview_lang = config.LANG_OPTIONS[preview_lang_display]
-            temp_video_path = Path("temp_preview_video.mp4")
+            temp_video_path = config.TEMP_DIR / "preview_video.mp4"
             preview_video = st.file_uploader("选择一个视频用于字幕样式预览", type=["mp4", "mov", "mkv"])
             if preview_video:
                 temp_video_path.write_bytes(preview_video.read())
@@ -190,7 +215,7 @@ def run():
             uploaded_font = st.file_uploader("上传自定义字体 (.ttf，非拉丁语言请上传对应字体)", type=["ttf", "ttc", "otf"])
             font_path = default_font_path
             if uploaded_font:
-                font_path = "uploaded_font.ttf"
+                font_path = str(config.TEMP_DIR / "uploaded_font.ttf")
                 Path(font_path).write_bytes(uploaded_font.read())
             else:
                 st.caption(f"默认字体：`{Path(default_font_path).name if default_font_path else '未找到'}`"
@@ -198,33 +223,39 @@ def run():
 
             if 'video_size' in st.session_state and font_path:
                 w, h = st.session_state['video_size']
-                with st.container(border=True):
-                    st.markdown("**字体与颜色**")
-                    font_size = st.slider("字体大小", 12, 100, 48)
-                    font_color = st.color_picker("字体颜色", "#FFFFFF")
-                with st.container(border=True):
-                    st.markdown("**描边**")
-                    stroke_width = st.slider("描边宽度", 0, 5, 1)
-                    stroke_color = st.color_picker("描边颜色", "#000000")
-                with st.container(border=True):
-                    st.markdown("**位置与尺寸**")
-                    bottom_offset = st.slider("距底部距离(px)", 0, h // 2, 80)
-                    width_ratio = st.slider("最大宽度比例", 0.2, 1.0, 0.8, step=0.05)
-                with st.container(border=True):
-                    st.markdown("**阴影**")
-                    shadow_opacity = st.slider("阴影不透明度", 0.0, 1.0, 0.5)
-                    shadow_color = st.color_picker("阴影颜色", "#000000")
-                    shadow_offset_y = st.slider("阴影垂直偏移(px)", -10, 10, 2)
+                saved = _load_style() or {}
+                # 滑块包进表单：拖动时不重渲染，点「应用」才更新预览，消除卡顿
+                with st.form("style_form"):
+                    with st.container(border=True):
+                        st.markdown("**字体与颜色**")
+                        font_size = st.slider("字体大小", 12, 100, saved.get("font_size", 48))
+                        font_color = st.color_picker("字体颜色", saved.get("font_color", "#FFFFFF"))
+                    with st.container(border=True):
+                        st.markdown("**描边**")
+                        stroke_width = st.slider("描边宽度", 0, 5, saved.get("stroke_width", 1))
+                        stroke_color = st.color_picker("描边颜色", saved.get("stroke_color", "#000000"))
+                    with st.container(border=True):
+                        st.markdown("**位置与尺寸**")
+                        bottom_offset = st.slider("距底部距离(px)", 0, h // 2, saved.get("bottom_offset", 80))
+                        width_ratio = st.slider("最大宽度比例", 0.2, 1.0,
+                                                round(saved.get("max_text_width", int(w * 0.8)) / w, 2), step=0.05)
+                    with st.container(border=True):
+                        st.markdown("**阴影**")
+                        shadow_opacity = st.slider("阴影不透明度", 0.0, 1.0, saved.get("shadow_opacity", 0.5))
+                        shadow_color = st.color_picker("阴影颜色", saved.get("shadow_color", "#000000"))
+                        shadow_offset_y = st.slider("阴影垂直偏移(px)", -10, 10, saved.get("shadow_offset", (0, 2))[1])
+                    submitted = st.form_submit_button("💾 应用并更新预览", type="primary", use_container_width=True)
 
-                style = {
-                    "font_path": str(font_path), "font_size": font_size, "font_color": font_color,
-                    "stroke_color": stroke_color, "stroke_width": stroke_width, "bottom_offset": bottom_offset,
-                    "max_text_width": int(w * width_ratio), "shadow_color": shadow_color,
-                    "shadow_opacity": shadow_opacity, "shadow_offset": (0, shadow_offset_y),
-                }
-                st.session_state["subtitle_style"] = style
-                _save_style(style)
-                st.success("✅ 样式已保存")
+                if submitted:
+                    style = {
+                        "font_path": str(font_path), "font_size": font_size, "font_color": font_color,
+                        "stroke_color": stroke_color, "stroke_width": stroke_width, "bottom_offset": bottom_offset,
+                        "max_text_width": int(w * width_ratio), "shadow_color": shadow_color,
+                        "shadow_opacity": shadow_opacity, "shadow_offset": (0, shadow_offset_y),
+                    }
+                    st.session_state["subtitle_style"] = style
+                    _save_style(style)
+                    st.success("✅ 样式已保存")
             elif not font_path:
                 st.info("请先上传字体后再调整样式。")
             else:
@@ -280,12 +311,16 @@ def run():
 
         with st.container(border=True):
             st.subheader("⚙️ 处理选项")
-            s_col1, s_col2 = st.columns(2)
+            s_col1, s_col2, s_col3 = st.columns(3)
             with s_col1:
                 match_mode = st.radio("SRT 匹配方式", ("按文件名匹配", "按顺序对应"))
             with s_col2:
                 crf = st.select_slider("输出压缩质量", options=[18, 20, 23, 28], value=23,
                                        help="CRF值越低，质量越高体积越大。18高质量, 23均衡, 28小体积。")
+            with s_col3:
+                preset = st.selectbox("编码速度 (preset)", config.ENCODE_PRESETS,
+                                      index=config.ENCODE_PRESETS.index(config.DEFAULT_PRESET),
+                                      help="越靠后越慢、压缩率越高。medium 通常是速度与体积的良好平衡。")
 
         st.divider()
         if st.button("🚀 开始批量添加字幕", type="primary", use_container_width=True):
@@ -323,7 +358,7 @@ def run():
                         subtitle_clips = generate_subtitle_clips(subs, video_clip.w, video_clip.h, style)
                         final_video = CompositeVideoClip([video_clip, *subtitle_clips])
                         final_video.write_videofile(
-                            str(output_path), codec="libx264", audio_codec="aac", preset="slow",
+                            str(output_path), codec="libx264", audio_codec="aac", preset=preset,
                             ffmpeg_params=["-crf", str(crf)], threads=4, logger=None
                         )
                         final_video.close()

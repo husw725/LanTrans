@@ -5,7 +5,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import config
-from translator import get_client, load_memory, save_memory, translate_srt, update_memory
+from translator import get_client, load_memory, save_memory, translate_srt, update_memory, trim_memory
 from ui_utils import validate_dir
 
 
@@ -43,6 +43,7 @@ def _process_single_language(lang, srt_files, client, input_dir, output_root, tr
             lang_cost += mem_cost
             if new_memory is not None:
                 memory.update(new_memory)
+                trim_memory(memory)
                 save_memory(memory, mem_path)
             elif err:
                 logs.append(f"⚠️ {srt_file}: {err}，本次记忆未更新。")
