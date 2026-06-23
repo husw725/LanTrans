@@ -1,6 +1,8 @@
 import streamlit as st
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 from functools import lru_cache
@@ -129,6 +131,98 @@ def wrap_text_pil(text, font_path, font_size, max_width):
         # 避头尾仅在同一段（同一原始行）内处理，避免跨行合并
         lines.extend(_apply_kinsoku(para_lines))
     return "\n".join(lines)
+
+
+@lru_cache(maxsize=1)
+def _ffmpeg_with_libass():
+    """返回带 subtitles(libass) 滤镜的 ffmpeg 路径；找不到返回 None。"""
+    candidates = [shutil.which("ffmpeg")]
+    try:
+        import imageio_ffmpeg
+        candidates.append(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        pass
+    for exe in filter(None, candidates):
+        try:
+            out = subprocess.run([exe, "-hide_banner", "-filters"],
+                                 capture_output=True, text=True, timeout=15).stdout
+            if "subtitles" in out:
+                return exe
+        except Exception:
+            continue
+    return None
+
+
+@lru_cache(maxsize=16)
+def _font_family(font_path):
+    try:
+        return ImageFont.truetype(font_path, 24).getname()[0]
+    except Exception:
+        return "Sans"
+
+
+def _ass_color(hex_color, opacity=1.0):
+    r, g, b = _hex_to_rgb(hex_color)
+    return f"&H{int((1 - opacity) * 255):02X}{b:02X}{g:02X}{r:02X}"  # &HAABBGGRR
+
+
+def _ass_time(t):
+    cs = int(round((t - int(t)) * 100))
+    return f"{int(t) // 3600}:{(int(t) // 60) % 60:02d}:{int(t) % 60:02d}.{cs:02d}"
+
+
+def build_ass(subs, style, w, h):
+    """把 SRT + 样式转成 ASS（libass 烧录用）。PlayRes=视频尺寸，字号即像素。"""
+    fam = _font_family(style["font_path"])
+    bold = -1 if style.get("bold", 0) > 0 else 0
+    if style.get("bg_enabled"):
+        border_style, outline, shadow = 3, style.get("bg_padding", 12), 0
+        outline_col = back_col = _ass_color(style.get("bg_color", "#000000"), style.get("bg_opacity", 0.5))
+    else:
+        border_style = 1
+        outline = style.get("stroke_width", 0) + (1 if style.get("bold", 0) > 2 else 0)
+        shadow = abs(style.get("shadow_offset", (0, 2))[1]) if style.get("shadow_opacity", 0) > 0 else 0
+        outline_col = _ass_color(style.get("stroke_color", "#000000"))
+        back_col = _ass_color(style.get("shadow_color", "#000000"), style.get("shadow_opacity", 0.5))
+    primary = _ass_color(style.get("font_color", "#FFFFFF"))
+    side = max(0, (w - style.get("max_text_width", int(w * 0.8))) // 2)
+    header = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: {w}
+PlayResY: {h}
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{fam},{style['font_size']},{primary},&H000000FF,{outline_col},{back_col},{bold},0,0,0,100,100,0,0,{border_style},{outline},{shadow},2,{side},{side},{style.get('bottom_offset', 80)},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    rows = []
+    for sub in subs:
+        txt = safe_text(sub.text).replace("\n", "\\N")
+        if txt:
+            rows.append(f"Dialogue: 0,{_ass_time(srt_time_to_seconds(sub.start))},"
+                        f"{_ass_time(srt_time_to_seconds(sub.end))},Default,,0,0,0,,{txt}")
+    return header + "\n".join(rows) + "\n"
+
+
+def burn_with_ffmpeg(exe, video_path, ass_path, out_path, crf, preset, fontsdir=None):
+    """用 libass 一趟烧录。音频默认直接复制(更快、无损)，失败则回退到 aac。"""
+    def esc(p):  # subtitles 滤镜里需转义反斜杠与冒号
+        return str(p).replace("\\", "/").replace(":", "\\:")
+    vf = f"subtitles='{esc(ass_path)}'"
+    if fontsdir:
+        vf += f":fontsdir='{esc(fontsdir)}'"
+    base = [exe, "-y", "-i", str(video_path), "-vf", vf,
+            "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+    for audio in (["-c:a", "copy"], ["-c:a", "aac"]):
+        r = subprocess.run(base + audio + [str(out_path)], capture_output=True, text=True)
+        if r.returncode == 0:
+            return
+    raise RuntimeError(r.stderr[-500:] if r.stderr else "ffmpeg 失败")
 
 
 def generate_subtitle_clips(subs, w, h, style):
@@ -446,8 +540,14 @@ def run():
 
             progress = st.progress(0, "准备开始...")
             log_container = st.container(height=300, border=True)
+            ffexe = _ffmpeg_with_libass()
+            if ffexe:
+                log_container.info("⚡ 使用 ffmpeg + libass 加速烧录（高质量、单趟编码）")
+            else:
+                log_container.warning("未检测到带 libass 的 ffmpeg，回退到 moviepy（较慢）")
+
             for i, video_name in enumerate(video_files):
-                progress.progress((i + 1) / len(video_files), f"正在处理 {i + 1}/{len(video_files)}: {video_name}（编码较慢，请耐心等待）")
+                progress.progress((i + 1) / len(video_files), f"正在处理 {i + 1}/{len(video_files)}: {video_name}")
                 video_path = Path(video_dir) / video_name
                 output_path = Path(output_dir) / video_name
                 if "文件名" in match_mode:
@@ -464,15 +564,22 @@ def run():
                     continue
                 try:
                     t0 = time.time()
-                    with VideoFileClip(str(video_path)) as video_clip:
-                        subs = pysrt.open(str(srt_path), encoding='utf-8')
-                        subtitle_clips = generate_subtitle_clips(subs, video_clip.w, video_clip.h, style)
-                        final_video = CompositeVideoClip([video_clip, *subtitle_clips])
-                        final_video.write_videofile(
-                            str(output_path), codec="libx264", audio_codec="aac", preset=preset,
-                            ffmpeg_params=["-crf", str(crf)], threads=4, logger=None
-                        )
-                        final_video.close()
+                    subs = pysrt.open(str(srt_path), encoding='utf-8')
+                    if ffexe:
+                        with VideoFileClip(str(video_path)) as vc:  # 仅读取分辨率，不解码帧
+                            vw, vh = vc.size
+                        ass_path = config.TEMP_DIR / "_burn.ass"
+                        ass_path.write_text(build_ass(subs, style, vw, vh), encoding="utf-8")
+                        fontsdir = str(Path(style["font_path"]).parent) if os.path.isfile(style["font_path"]) else None
+                        burn_with_ffmpeg(ffexe, video_path, ass_path, output_path, crf, preset, fontsdir)
+                    else:
+                        with VideoFileClip(str(video_path)) as video_clip:
+                            subtitle_clips = generate_subtitle_clips(subs, video_clip.w, video_clip.h, style)
+                            final_video = CompositeVideoClip([video_clip, *subtitle_clips])
+                            final_video.write_videofile(
+                                str(output_path), codec="libx264", audio_codec="aac", preset=preset,
+                                ffmpeg_params=["-crf", str(crf)], threads=4, logger=None)
+                            final_video.close()
                     log_container.success(f"✅ {video_name} 已处理完成（耗时 {time.time() - t0:.0f}s）。")
                 except Exception as e:
                     log_container.error(f"❌ 处理 {video_name} 时出错: {e}")

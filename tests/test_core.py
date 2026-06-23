@@ -77,6 +77,25 @@ def test_wrap_cjk_and_kinsoku():
     assert all(not step3._is_combining_mark(ln[0]) for ln in lines if ln)
 
 
+def test_ass_helpers():
+    assert step3._ass_color("#FFFFFF", 1.0) == "&H00FFFFFF"
+    assert step3._ass_color("#000000", 0.5) == "&H7F000000"   # alpha 127, BGR 000000
+    assert step3._ass_color("#FFE000", 1.0) == "&H0000E0FF"   # R=FF G=E0 B=00 -> BBGGRR=00E0FF
+    assert step3._ass_time(3661.5) == "1:01:01.50"
+
+
+def test_build_ass():
+    import pysrt
+    style = {"font_path": step3.default_font_path or "x", "font_size": 48, "font_color": "#FFFFFF",
+             "stroke_color": "#000000", "stroke_width": 2, "bold": 1, "bottom_offset": 80,
+             "max_text_width": 1500, "shadow_color": "#000000", "shadow_opacity": 0.5,
+             "shadow_offset": (0, 2), "bg_enabled": False}
+    subs = pysrt.from_string("1\n00:00:01,000 --> 00:00:02,000\nHello\n世界")
+    ass = step3.build_ass(subs, style, 1920, 1080)
+    assert "[V4+ Styles]" in ass and "PlayResX: 1920" in ass
+    assert "Dialogue:" in ass and "Hello\\N世界" in ass  # 换行转为 \N
+
+
 def _run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
