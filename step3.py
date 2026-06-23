@@ -15,7 +15,7 @@ from PIL import Image, ImageFont, ImageDraw
 import pysrt
 
 # --- Configuration & Helpers ---
-# 字幕渲染统一用 PIL（见 render_subtitle_layer），不再依赖 ImageMagick/TextClip：
+# 字幕渲染统一用 PIL（见 render_block），不再依赖 ImageMagick/TextClip：
 # 预览与烧录像素级一致，也免去了 Windows 配置 IMAGEMAGICK_BINARY 的麻烦。
 
 # 跨平台默认字体：优先 Arial 等拉丁字体（多数目标语言为拉丁文，且 .ttf 渲染最稳），
@@ -132,15 +132,15 @@ def wrap_text_pil(text, font_path, font_size, max_width):
 
 
 def generate_subtitle_clips(subs, w, h, style):
-    """为每条字幕生成一个整帧透明图层 ImageClip（与预览同一套 PIL 渲染）。"""
+    """为每条字幕生成一个【紧凑】定位的透明 ImageClip（与预览同一套 PIL 渲染）。"""
     clips = []
     for sub in subs:
         safe_txt = safe_text(sub.text)
         if not safe_txt:
             continue
-        layer = render_subtitle_layer((w, h), safe_txt, style)
+        block, x, y = render_block((w, h), safe_txt, style)
         start, end = srt_time_to_seconds(sub.start), srt_time_to_seconds(sub.end)
-        clip = ImageClip(np.array(layer), transparent=True).set_start(start).set_end(end)
+        clip = ImageClip(np.array(block), transparent=True).set_position((x, y)).set_start(start).set_end(end)
         clips.append(clip)
     return clips
 
@@ -162,51 +162,56 @@ def _wrap_and_fit(text, style):
         fs -= 2
 
 
-def render_subtitle_layer(size, text, style):
-    """把单条字幕渲染成整帧大小的透明 RGBA 图层（背景条 + 阴影 + 描边 + 伪加粗 + 文字）。
-    预览与烧录共用此函数，确保所见即所得。"""
-    w, h = size
-    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
+_SCRATCH = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
 
+
+def render_block(frame_size, text, style):
+    """把单条字幕渲染成一张【紧凑】RGBA 小图（背景条+阴影+描边+伪加粗+文字），
+    返回 (img, x, y) 左上角粘贴坐标。预览与烧录共用，保证所见即所得。
+    用小图而非整帧图层：合成成本随文字块大小而非画面分辨率，烧录才不会慢。"""
+    W, H = frame_size
     wrapped, fs = _wrap_and_fit(text, style)
     font = _get_font(style["font_path"], fs)
     bold = style.get("bold", 0)
     outline = style.get("stroke_width", 0)
     spacing = style.get("line_spacing", max(2, int(fs * 0.2)))
-    x, y = w // 2, h - style["bottom_offset"]
-    common = dict(font=font, anchor="ma", align="center", spacing=spacing)
+    total = outline + bold
+    sx, sy = style.get("shadow_offset", (0, 2)) if style.get("shadow_opacity", 0) > 0 else (0, 0)
+    common = dict(font=font, anchor="la", align="center", spacing=spacing)
 
-    # 背景色块（半透明）
+    l, t, r, b = _SCRATCH.multiline_textbbox((0, 0), wrapped, stroke_width=total, **common)
+    pad = style.get("bg_padding", 12) if style.get("bg_enabled") else max(2, total)
+    bw = (r - l) + 2 * pad + abs(sx)
+    bh = (b - t) + 2 * pad + abs(sy)
+    block = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+    d = ImageDraw.Draw(block)
+    tx = pad - l + max(0, -sx)   # 文字绘制基点，使内容含 pad 并为阴影方向留白
+    ty = pad - t + max(0, -sy)
+
     if style.get("bg_enabled"):
-        bbox = draw.multiline_textbbox((x, y), wrapped, stroke_width=outline + bold, **common)
-        pad = style.get("bg_padding", 12)
-        rect = (bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad)
         bg = _hex_to_rgb(style.get("bg_color", "#000000")) + (int(255 * style.get("bg_opacity", 0.5)),)
-        draw.rounded_rectangle(rect, radius=style.get("bg_radius", 10), fill=bg)
-
-    # 阴影层
+        d.rounded_rectangle([tx + l - pad, ty + t - pad, tx + r + pad, ty + b + pad],
+                            radius=style.get("bg_radius", 10), fill=bg)
     if style.get("shadow_opacity", 0) > 0:
-        sx, sy = style.get("shadow_offset", (0, 2))
-        shadow_rgba = _hex_to_rgb(style["shadow_color"]) + (int(255 * style["shadow_opacity"]),)
-        draw.multiline_text((x + sx, y + sy), wrapped, fill=shadow_rgba, stroke_width=bold, **common)
-
-    # 描边层（颜色边，厚度含伪加粗）
+        sh = _hex_to_rgb(style["shadow_color"]) + (int(255 * style["shadow_opacity"]),)
+        d.multiline_text((tx + sx, ty + sy), wrapped, fill=sh, stroke_width=bold, **common)
     if outline > 0:
         edge = _hex_to_rgb(style["stroke_color"]) + (255,)
-        draw.multiline_text((x, y), wrapped, fill=edge, stroke_width=outline + bold, stroke_fill=edge, **common)
-
-    # 文字本体（伪加粗 = 同色描边把字身撑粗）
+        d.multiline_text((tx, ty), wrapped, fill=edge, stroke_width=outline + bold, stroke_fill=edge, **common)
     fill = _hex_to_rgb(style["font_color"]) + (255,)
-    draw.multiline_text((x, y), wrapped, fill=fill, stroke_width=bold, stroke_fill=fill, **common)
-    return overlay
+    d.multiline_text((tx, ty), wrapped, fill=fill, stroke_width=bold, stroke_fill=fill, **common)
+
+    x = (W - bw) // 2
+    y = H - style["bottom_offset"] - ty   # 保持"文字顶部≈H-bottom_offset"的旧定位
+    return block, x, y
 
 
 def render_preview_pil(frame_img, text, style):
-    """实时预览：把字幕层合成到缓存帧上。"""
+    """实时预览：把紧凑字幕块贴到缓存帧上。"""
     base = frame_img.convert("RGBA")
-    layer = render_subtitle_layer(base.size, text, style)
-    return Image.alpha_composite(base, layer).convert("RGB")
+    block, x, y = render_block(base.size, text, style)
+    base.alpha_composite(block, (max(0, x), max(0, y)))
+    return base.convert("RGB")
 
 
 def _save_style(style):
