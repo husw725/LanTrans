@@ -115,6 +115,8 @@ CRF_OPTIONS = [16, 18, 20, 22, 24, 26, 28, 30]
 DEFAULT_CRF = 22
 ENCODE_PRESETS = ["veryfast", "fast", "medium", "slow"]  # 越靠右越慢、压缩率越高
 DEFAULT_PRESET = "medium"
+# libx264 preset → NVENC preset(p1 最快 … p7 最慢质量最好）
+NVENC_PRESET_MAP = {"veryfast": "p1", "fast": "p3", "medium": "p5", "slow": "p7"}
 
 
 def get_api_key() -> str | None:

@@ -155,6 +155,18 @@ def _ffmpeg_with_libass():
     return None
 
 
+@lru_cache(maxsize=4)
+def _has_encoder(exe, name):
+    """ffmpeg 是否包含某编码器（如 h264_nvenc）。"""
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    try:
+        out = subprocess.run([exe, "-hide_banner", "-encoders"], capture_output=True, text=True,
+                             timeout=15, stdin=subprocess.DEVNULL, creationflags=flags).stdout
+        return name in out
+    except Exception:
+        return False
+
+
 @lru_cache(maxsize=16)
 def _font_family(font_path):
     try:
@@ -211,26 +223,38 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(rows) + "\n"
 
 
-def burn_with_ffmpeg(exe, video_path, ass_path, out_path, crf, preset, fontsdir=None, threads=0):
-    """用 libass 一趟烧录。音频默认直接复制(更快、无损)，失败则回退到 aac。"""
+def _vcodec_args(encoder, crf, preset):
+    """按编码器返回视频参数。NVENC 用 -cq 控质量，与 CRF 同档对应。"""
+    if encoder == "h264_nvenc":
+        return ["-c:v", "h264_nvenc", "-preset", config.NVENC_PRESET_MAP.get(preset, "p5"),
+                "-tune", "hq", "-rc", "vbr", "-cq", str(crf), "-b:v", "0", "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+
+
+def burn_with_ffmpeg(exe, video_path, ass_path, out_path, crf, preset, fontsdir=None, threads=0, encoder="libx264"):
+    """用 libass 一趟烧录。视频按 encoder 选 CPU/GPU；NVENC 运行失败自动回退 libx264。
+    音频默认直接复制(更快、无损)，失败则回退到 aac。"""
     def esc(p):  # subtitles 滤镜里需转义反斜杠与冒号
         return str(p).replace("\\", "/").replace(":", "\\:")
     vf = f"subtitles='{esc(ass_path)}'"
     if fontsdir:
         vf += f":fontsdir='{esc(fontsdir)}'"
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0  # Windows 下不弹黑框
     # -nostdin / stdin=DEVNULL：ffmpeg 默认会读 stdin，被 Streamlit 这类无控制台进程拉起时
     # 会卡在等待输入（不报错、不出文件）。务必关掉。
-    base = [exe, "-nostdin", "-loglevel", "error", "-y", "-i", str(video_path), "-vf", vf,
-            "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
-    if threads:
-        base += ["-threads", str(threads)]
-    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0  # Windows 下不弹黑框
-    for audio in (["-c:a", "copy"], ["-c:a", "aac"]):
-        r = subprocess.run(base + audio + [str(out_path)], capture_output=True, text=True,
-                           stdin=subprocess.DEVNULL, creationflags=flags)
-        if r.returncode == 0:
-            return
-    raise RuntimeError(r.stderr[-500:] if r.stderr else "ffmpeg 失败")
+    head = [exe, "-nostdin", "-loglevel", "error", "-y", "-i", str(video_path), "-vf", vf]
+    tail = (["-threads", str(threads)] if threads else [])
+    err = ""
+    encoders = [encoder, "libx264"] if encoder != "libx264" else ["libx264"]  # GPU 失败回退 CPU
+    for enc in encoders:
+        for audio in (["-c:a", "copy"], ["-c:a", "aac"]):
+            cmd = head + _vcodec_args(enc, crf, preset) + tail + audio + [str(out_path)]
+            r = subprocess.run(cmd, capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, creationflags=flags)
+            if r.returncode == 0:
+                return
+            err = r.stderr
+    raise RuntimeError(err[-500:] if err else "ffmpeg 失败")
 
 
 def generate_subtitle_clips(subs, w, h, style):
@@ -247,7 +271,7 @@ def generate_subtitle_clips(subs, w, h, style):
     return clips
 
 
-def _burn_one(i, video_name, video_dir, srt_dir, output_dir, match_mode, srt_files, style, crf, preset, ffexe, threads):
+def _burn_one(i, video_name, video_dir, srt_dir, output_dir, match_mode, srt_files, style, crf, preset, ffexe, threads, encoder="libx264"):
     """烧录单个视频。纯函数、不调用 st.*（在工作线程中运行）。
     返回 (video_name, status, msg)，status ∈ {ok, skip, error}。"""
     video_path = Path(video_dir) / video_name
@@ -270,7 +294,7 @@ def _burn_one(i, video_name, video_dir, srt_dir, output_dir, match_mode, srt_fil
             ass_path = config.TEMP_DIR / f"_burn_{i}.ass"  # 按序号唯一，避免并行互相覆盖
             ass_path.write_text(build_ass(subs, style, vw, vh), encoding="utf-8")
             fontsdir = str(Path(style["font_path"]).parent) if os.path.isfile(style["font_path"]) else None
-            burn_with_ffmpeg(ffexe, video_path, ass_path, output_path, crf, preset, fontsdir, threads)
+            burn_with_ffmpeg(ffexe, video_path, ass_path, output_path, crf, preset, fontsdir, threads, encoder)
         else:
             with VideoFileClip(str(video_path)) as video_clip:
                 clips = generate_subtitle_clips(subs, video_clip.w, video_clip.h, style)
@@ -570,8 +594,19 @@ def run():
                 preset = st.selectbox("编码速度 (preset)", config.ENCODE_PRESETS,
                                       index=config.ENCODE_PRESETS.index(config.DEFAULT_PRESET),
                                       help="越靠后越慢、压缩率越高。medium 通常是速度与体积的良好平衡。")
-            concurrency = st.slider("并行任务数", 1, 4, 2,
-                                    help="同时烧录的视频数。单个编码已多线程，单机 2 通常最划算；机器强可调高。")
+            ffexe = _ffmpeg_with_libass()
+            gpu_ok = bool(ffexe) and _has_encoder(ffexe, "h264_nvenc")
+            r_col1, r_col2 = st.columns(2)
+            with r_col1:
+                concurrency = st.slider("并行任务数", 1, 4, 2,
+                                        help="同时烧录的视频数。单个编码已多线程，单机 2 通常最划算；机器强可调高。")
+            with r_col2:
+                enc_choice = st.selectbox("编码器", ["自动", "GPU (NVENC)", "CPU (libx264)"],
+                                          help="GPU(NVENC) 由显卡硬件编码，通常快数倍。自动=检测到 N 卡就用 GPU。")
+            st.caption("🟢 检测到 NVENC，可用 GPU 加速" if gpu_ok
+                       else "⚪ 未检测到 NVENC（需带 nvenc 的 ffmpeg + N 卡驱动），将用 CPU")
+            encoder = (("h264_nvenc" if gpu_ok else "libx264") if enc_choice == "自动"
+                       else "h264_nvenc" if enc_choice.startswith("GPU") else "libx264")
 
         st.divider()
         if st.button("🚀 开始批量添加字幕", type="primary", use_container_width=True):
@@ -586,10 +621,10 @@ def run():
 
             progress = st.progress(0, "准备开始...")
             log_container = st.container(height=300, border=True)
-            ffexe = _ffmpeg_with_libass()
             if ffexe:
-                log_container.info(f"⚡ ffmpeg + libass 加速烧录（{concurrency} 并行）"
-                                   f"｜共 {len(video_files)} 个，单个视频编码可能需数分钟，完成一个刷新一条")
+                eng = "GPU(NVENC)" if encoder == "h264_nvenc" else "CPU(libx264)"
+                log_container.info(f"⚡ ffmpeg + libass 烧录｜编码器 {eng}｜{concurrency} 并行"
+                                   f"｜共 {len(video_files)} 个，完成一个刷新一条")
             else:
                 log_container.warning("未检测到带 libass 的 ffmpeg，回退到 moviepy（较慢）")
 
@@ -597,7 +632,7 @@ def run():
             total, done = len(video_files), 0
             with ThreadPoolExecutor(max_workers=concurrency) as ex:
                 futures = [ex.submit(_burn_one, i, vn, video_dir, srt_dir, output_dir, match_mode,
-                                     srt_files, style, crf, preset, ffexe, threads)
+                                     srt_files, style, crf, preset, ffexe, threads, encoder)
                            for i, vn in enumerate(video_files)]
                 for fut in as_completed(futures):
                     name, status, msg = fut.result()
