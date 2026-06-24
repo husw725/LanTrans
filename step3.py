@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from pathlib import Path
 
@@ -209,7 +210,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + "\n".join(rows) + "\n"
 
 
-def burn_with_ffmpeg(exe, video_path, ass_path, out_path, crf, preset, fontsdir=None):
+def burn_with_ffmpeg(exe, video_path, ass_path, out_path, crf, preset, fontsdir=None, threads=0):
     """用 libass 一趟烧录。音频默认直接复制(更快、无损)，失败则回退到 aac。"""
     def esc(p):  # subtitles 滤镜里需转义反斜杠与冒号
         return str(p).replace("\\", "/").replace(":", "\\:")
@@ -218,6 +219,8 @@ def burn_with_ffmpeg(exe, video_path, ass_path, out_path, crf, preset, fontsdir=
         vf += f":fontsdir='{esc(fontsdir)}'"
     base = [exe, "-y", "-i", str(video_path), "-vf", vf,
             "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+    if threads:
+        base += ["-threads", str(threads)]
     for audio in (["-c:a", "copy"], ["-c:a", "aac"]):
         r = subprocess.run(base + audio + [str(out_path)], capture_output=True, text=True)
         if r.returncode == 0:
@@ -237,6 +240,42 @@ def generate_subtitle_clips(subs, w, h, style):
         clip = ImageClip(np.array(block), transparent=True).set_position((x, y)).set_start(start).set_end(end)
         clips.append(clip)
     return clips
+
+
+def _burn_one(i, video_name, video_dir, srt_dir, output_dir, match_mode, srt_files, style, crf, preset, ffexe, threads):
+    """烧录单个视频。纯函数、不调用 st.*（在工作线程中运行）。
+    返回 (video_name, status, msg)，status ∈ {ok, skip, error}。"""
+    video_path = Path(video_dir) / video_name
+    output_path = Path(output_dir) / video_name
+    if "文件名" in match_mode:
+        srt_name = Path(video_name).stem + ".srt"
+    elif i < len(srt_files):
+        srt_name = srt_files[i]
+    else:
+        return video_name, "skip", "没有对应的 SRT（按顺序对应不足）"
+    srt_path = Path(srt_dir) / srt_name
+    if not srt_path.exists():
+        return video_name, "skip", f"对应的 SRT（{srt_name}）未找到"
+    try:
+        t0 = time.time()
+        subs = pysrt.open(str(srt_path), encoding='utf-8')
+        if ffexe:
+            with VideoFileClip(str(video_path)) as vc:  # 仅读分辨率
+                vw, vh = vc.size
+            ass_path = config.TEMP_DIR / f"_burn_{i}.ass"  # 按序号唯一，避免并行互相覆盖
+            ass_path.write_text(build_ass(subs, style, vw, vh), encoding="utf-8")
+            fontsdir = str(Path(style["font_path"]).parent) if os.path.isfile(style["font_path"]) else None
+            burn_with_ffmpeg(ffexe, video_path, ass_path, output_path, crf, preset, fontsdir, threads)
+        else:
+            with VideoFileClip(str(video_path)) as video_clip:
+                clips = generate_subtitle_clips(subs, video_clip.w, video_clip.h, style)
+                final = CompositeVideoClip([video_clip, *clips])
+                final.write_videofile(str(output_path), codec="libx264", audio_codec="aac", preset=preset,
+                                      ffmpeg_params=["-crf", str(crf)], threads=threads or 4, logger=None)
+                final.close()
+        return video_name, "ok", f"完成（耗时 {time.time() - t0:.0f}s）"
+    except Exception as e:
+        return video_name, "error", f"出错: {e}"
 
 
 def _hex_to_rgb(hex_color):
@@ -526,6 +565,8 @@ def run():
                 preset = st.selectbox("编码速度 (preset)", config.ENCODE_PRESETS,
                                       index=config.ENCODE_PRESETS.index(config.DEFAULT_PRESET),
                                       help="越靠后越慢、压缩率越高。medium 通常是速度与体积的良好平衡。")
+            concurrency = st.slider("并行任务数", 1, 4, 2,
+                                    help="同时烧录的视频数。单个编码已多线程，单机 2 通常最划算；机器强可调高。")
 
         st.divider()
         if st.button("🚀 开始批量添加字幕", type="primary", use_container_width=True):
@@ -542,47 +583,26 @@ def run():
             log_container = st.container(height=300, border=True)
             ffexe = _ffmpeg_with_libass()
             if ffexe:
-                log_container.info("⚡ 使用 ffmpeg + libass 加速烧录（高质量、单趟编码）")
+                log_container.info(f"⚡ ffmpeg + libass 加速烧录（{concurrency} 并行）")
             else:
                 log_container.warning("未检测到带 libass 的 ffmpeg，回退到 moviepy（较慢）")
 
-            for i, video_name in enumerate(video_files):
-                progress.progress((i + 1) / len(video_files), f"正在处理 {i + 1}/{len(video_files)}: {video_name}")
-                video_path = Path(video_dir) / video_name
-                output_path = Path(output_dir) / video_name
-                if "文件名" in match_mode:
-                    srt_name = Path(video_name).stem + ".srt"
-                elif i < len(srt_files):
-                    srt_name = srt_files[i]
-                else:
-                    log_container.warning(f"⚠️ {video_name} 没有对应的 SRT（按顺序对应不足），跳过。")
-                    continue
-                srt_path = Path(srt_dir) / srt_name
-
-                if not srt_path.exists():
-                    log_container.warning(f"⚠️ {video_name} 对应的 SRT ({srt_name}) 未找到，跳过。")
-                    continue
-                try:
-                    t0 = time.time()
-                    subs = pysrt.open(str(srt_path), encoding='utf-8')
-                    if ffexe:
-                        with VideoFileClip(str(video_path)) as vc:  # 仅读取分辨率，不解码帧
-                            vw, vh = vc.size
-                        ass_path = config.TEMP_DIR / "_burn.ass"
-                        ass_path.write_text(build_ass(subs, style, vw, vh), encoding="utf-8")
-                        fontsdir = str(Path(style["font_path"]).parent) if os.path.isfile(style["font_path"]) else None
-                        burn_with_ffmpeg(ffexe, video_path, ass_path, output_path, crf, preset, fontsdir)
+            threads = max(1, (os.cpu_count() or 4) // concurrency)  # 限每任务线程，减少核心争抢
+            total, done = len(video_files), 0
+            with ThreadPoolExecutor(max_workers=concurrency) as ex:
+                futures = [ex.submit(_burn_one, i, vn, video_dir, srt_dir, output_dir, match_mode,
+                                     srt_files, style, crf, preset, ffexe, threads)
+                           for i, vn in enumerate(video_files)]
+                for fut in as_completed(futures):
+                    name, status, msg = fut.result()
+                    if status == "ok":
+                        log_container.success(f"✅ {name} {msg}")
+                    elif status == "skip":
+                        log_container.warning(f"⚠️ {name} {msg}，跳过。")
                     else:
-                        with VideoFileClip(str(video_path)) as video_clip:
-                            subtitle_clips = generate_subtitle_clips(subs, video_clip.w, video_clip.h, style)
-                            final_video = CompositeVideoClip([video_clip, *subtitle_clips])
-                            final_video.write_videofile(
-                                str(output_path), codec="libx264", audio_codec="aac", preset=preset,
-                                ffmpeg_params=["-crf", str(crf)], threads=4, logger=None)
-                            final_video.close()
-                    log_container.success(f"✅ {video_name} 已处理完成（耗时 {time.time() - t0:.0f}s）。")
-                except Exception as e:
-                    log_container.error(f"❌ 处理 {video_name} 时出错: {e}")
+                        log_container.error(f"❌ {name} {msg}")
+                    done += 1
+                    progress.progress(done / total, f"已完成 {done}/{total}")
 
             st.balloons()
             st.success("🎉 所有视频已处理完成！")
