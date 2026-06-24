@@ -143,10 +143,11 @@ def _ffmpeg_with_libass():
         candidates.append(imageio_ffmpeg.get_ffmpeg_exe())
     except Exception:
         pass
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     for exe in filter(None, candidates):
         try:
-            out = subprocess.run([exe, "-hide_banner", "-filters"],
-                                 capture_output=True, text=True, timeout=15).stdout
+            out = subprocess.run([exe, "-hide_banner", "-filters"], capture_output=True, text=True,
+                                 timeout=15, stdin=subprocess.DEVNULL, creationflags=flags).stdout
             if "subtitles" in out:
                 return exe
         except Exception:
@@ -217,12 +218,16 @@ def burn_with_ffmpeg(exe, video_path, ass_path, out_path, crf, preset, fontsdir=
     vf = f"subtitles='{esc(ass_path)}'"
     if fontsdir:
         vf += f":fontsdir='{esc(fontsdir)}'"
-    base = [exe, "-y", "-i", str(video_path), "-vf", vf,
+    # -nostdin / stdin=DEVNULL：ffmpeg 默认会读 stdin，被 Streamlit 这类无控制台进程拉起时
+    # 会卡在等待输入（不报错、不出文件）。务必关掉。
+    base = [exe, "-nostdin", "-loglevel", "error", "-y", "-i", str(video_path), "-vf", vf,
             "-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
     if threads:
         base += ["-threads", str(threads)]
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0  # Windows 下不弹黑框
     for audio in (["-c:a", "copy"], ["-c:a", "aac"]):
-        r = subprocess.run(base + audio + [str(out_path)], capture_output=True, text=True)
+        r = subprocess.run(base + audio + [str(out_path)], capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, creationflags=flags)
         if r.returncode == 0:
             return
     raise RuntimeError(r.stderr[-500:] if r.stderr else "ffmpeg 失败")
@@ -583,7 +588,8 @@ def run():
             log_container = st.container(height=300, border=True)
             ffexe = _ffmpeg_with_libass()
             if ffexe:
-                log_container.info(f"⚡ ffmpeg + libass 加速烧录（{concurrency} 并行）")
+                log_container.info(f"⚡ ffmpeg + libass 加速烧录（{concurrency} 并行）"
+                                   f"｜共 {len(video_files)} 个，单个视频编码可能需数分钟，完成一个刷新一条")
             else:
                 log_container.warning("未检测到带 libass 的 ffmpeg，回退到 moviepy（较慢）")
 
