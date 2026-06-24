@@ -491,10 +491,22 @@ def run():
             bundled = _list_fonts()
             font_choice = st.selectbox("字体", ["系统默认"] + list(bundled.keys()),
                                        help="把字体放进项目 fonts/ 目录即可在此选择；上传字体优先级最高。")
-            if uploaded_font:
-                font_path = str(config.TEMP_DIR / "uploaded_font.ttf")
-                Path(font_path).write_bytes(uploaded_font.read())
-                st.caption("当前使用：上传的字体")
+            if uploaded_font is not None:
+                # getvalue() 不受读取位置影响（read() 在重跑时会返回空 → 写 0 字节字体后崩）。
+                # 文件名只用字母数字 + 真实后缀，避免 Windows 上非法字符导致 [Errno 22]。
+                try:
+                    suffix = Path(uploaded_font.name).suffix.lower()
+                    if suffix not in (".ttf", ".ttc", ".otf"):
+                        suffix = ".ttf"
+                    fid = "".join(c for c in str(getattr(uploaded_font, "file_id", "") or uploaded_font.name) if c.isalnum())[:16] or "u"
+                    font_path = str(config.TEMP_DIR / f"font_{fid}{suffix}")
+                    if not os.path.exists(font_path):
+                        Path(font_path).write_bytes(uploaded_font.getvalue())
+                    _get_font(font_path, 24)  # 校验能否加载
+                    st.caption(f"当前使用：上传的字体（{uploaded_font.name}）")
+                except Exception as e:
+                    st.error(f"字体保存/加载失败：{e}。已回退默认字体，请换一个标准 .ttf/.otf 再试。")
+                    font_path = default_font_path
             elif font_choice != "系统默认":
                 font_path = bundled[font_choice]
             else:
