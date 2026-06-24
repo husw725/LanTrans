@@ -1,5 +1,6 @@
 import streamlit as st
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -342,6 +343,8 @@ def render_block(frame_size, text, style):
     common = dict(font=font, anchor="la", align="center", spacing=spacing)
 
     l, t, r, b = _SCRATCH.multiline_textbbox((0, 0), wrapped, stroke_width=total, **common)
+    # 某些 Pillow 版本 textbbox 返回 float；取整避免 Image.new/坐标报 'float' object cannot be interpreted as an integer
+    l, t, r, b = math.floor(l), math.floor(t), math.ceil(r), math.ceil(b)
     pad = style.get("bg_padding", 12) if style.get("bg_enabled") else max(2, total)
     bw = (r - l) + 2 * pad + abs(sx)
     bh = (b - t) + 2 * pad + abs(sy)
