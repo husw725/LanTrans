@@ -225,10 +225,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def _vcodec_args(encoder, crf, preset):
-    """按编码器返回视频参数。NVENC 用 -cq 控质量，与 CRF 同档对应。"""
+    """按编码器返回视频参数。NVENC 用 -cq 控质量，与 CRF 同档对应。
+    NVENC 默认效率差(码率偏高)，这里开启 AQ / 前瞻 / B帧 / 多遍，显著压低码率、贴近 libx264。"""
     if encoder == "h264_nvenc":
         return ["-c:v", "h264_nvenc", "-preset", config.NVENC_PRESET_MAP.get(preset, "p5"),
-                "-tune", "hq", "-rc", "vbr", "-cq", str(crf), "-b:v", "0", "-pix_fmt", "yuv420p"]
+                "-tune", "hq", "-rc", "vbr", "-cq", str(crf), "-b:v", "0",
+                "-multipass", "fullres",      # 两遍编码，码率分配更准
+                "-spatial-aq", "1", "-temporal-aq", "1",  # 自适应量化，省码率
+                "-rc-lookahead", "20", "-bf", "3",        # 前瞻 + B帧，提升压缩率
+                "-pix_fmt", "yuv420p"]
     return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
 
 
