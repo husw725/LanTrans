@@ -596,12 +596,13 @@ def run():
             with s_col1:
                 match_mode = st.radio("SRT 匹配方式", ("按文件名匹配", "按顺序对应"))
             with s_col2:
-                crf = st.select_slider("输出压缩质量", options=[18, 20, 23, 28], value=23,
-                                       help="CRF值越低，质量越高体积越大。18高质量, 23均衡, 28小体积。")
+                crf = st.select_slider("输出压缩质量", options=[18, 20, 23, 26, 28, 30, 32], value=23,
+                                       help="数值越大→体积越小、画质越低。CPU(CRF)：18 极清 / 23 均衡 / 28 小。"
+                                            "GPU(CQ) 同数值偏大，想要同等观感建议比 CPU 调高 2~3 档。")
             with s_col3:
                 preset = st.selectbox("编码速度 (preset)", config.ENCODE_PRESETS,
                                       index=config.ENCODE_PRESETS.index(config.DEFAULT_PRESET),
-                                      help="越靠后越慢、压缩率越高。medium 通常是速度与体积的良好平衡。")
+                                      help="越靠后越慢、压缩率越高（体积更小）。CPU 求最小体积选 slow。")
             ffexe = _ffmpeg_with_libass()
             gpu_ok = bool(ffexe) and _has_encoder(ffexe, "h264_nvenc")
             r_col1, r_col2 = st.columns(2)
@@ -610,11 +611,21 @@ def run():
                                         help="同时烧录的视频数。单个编码已多线程，单机 2 通常最划算；机器强可调高。")
             with r_col2:
                 enc_choice = st.selectbox("编码器", ["自动", "GPU (NVENC)", "CPU (libx264)"],
-                                          help="GPU(NVENC) 由显卡硬件编码，通常快数倍。自动=检测到 N 卡就用 GPU。")
-            st.caption("🟢 检测到 NVENC，可用 GPU 加速" if gpu_ok
-                       else "⚪ 未检测到 NVENC（需带 nvenc 的 ffmpeg + N 卡驱动），将用 CPU")
+                                          help="CPU(libx264)：压缩率最高，同体积画质最好，但慢。\n"
+                                               "GPU(NVENC)：显卡硬件编码，快数倍，但同画质体积略大。\n"
+                                               "自动：检测到 N 卡用 GPU，否则 CPU。")
             encoder = (("h264_nvenc" if gpu_ok else "libx264") if enc_choice == "自动"
                        else "h264_nvenc" if enc_choice.startswith("GPU") else "libx264")
+            # 明确告诉用户当前取舍：质量/体积优先走 CPU，速度优先走 GPU
+            if enc_choice.startswith("GPU") and not gpu_ok:
+                st.warning("⚠️ 未检测到可用 NVENC，将自动改用 CPU(libx264)。"
+                           "需带 nvenc 的 ffmpeg + N 卡驱动；可装 gyan.dev 完整版 ffmpeg 并加入 PATH。")
+            elif encoder == "h264_nvenc":
+                st.info("🚀 **GPU 模式（速度优先）**：编码快数倍。同画质下体积比 CPU 略大——"
+                        "想更小就把「压缩质量」调到 28~32，或改用 CPU。")
+            else:
+                st.success("🎯 **CPU 模式（质量/体积优先）**：压缩率最高、同体积画质最好，但较慢。"
+                           "求最小体积把 preset 选 slow；想快就改 GPU。" + ("" if gpu_ok else "（本机未检测到 NVENC）"))
 
         st.divider()
         if st.button("🚀 开始批量添加字幕", type="primary", use_container_width=True):
